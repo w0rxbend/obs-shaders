@@ -1,0 +1,55 @@
+// Lens Dirt — procedural noise-based sensor dust/smudge overlay
+// Strength: controls how dark the dirt patches get (0.0 = invisible, 1.0 = full black)
+// Scale:    controls the size of the noise pattern (higher = smaller patches)
+
+uniform float strength = 0.7;
+uniform float scale = 20.0;
+
+float hash(float2 p)
+{
+    p = frac(p * 0.3183099 + float2(.71, .113));
+    p *= 50.0;
+    return frac(p.x * p.y * (p.x + p.y));
+}
+
+float noise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+
+    float a = hash(i);
+    float b = hash(i + float2(1, 0));
+    float c = hash(i + float2(0, 1));
+    float d = hash(i + float2(1, 1));
+
+    float2 u = f * f * (3.0 - 2.0 * f);
+
+    return lerp(
+        lerp(a, b, u.x),
+        lerp(c, d, u.x),
+        u.y
+    );
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Fractal noise: 3 octaves for organic-looking dirt
+    float dirt = noise(uv * scale);
+    dirt += noise(uv * scale * 2.5) * 0.5;
+    dirt += noise(uv * scale * 5.0) * 0.25;
+    dirt /= 1.75;
+
+    float mask = smoothstep(0.45, 0.85, dirt);
+
+    col.rgb *= lerp(1.0 - strength, 1.0, mask);
+
+    // Slight desaturation in dirt areas for a more realistic look
+    float lum = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    col.rgb = lerp(float3(lum, lum, lum), col.rgb, 0.7);
+
+    return col;
+}

@@ -1,0 +1,19 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+*.swp
+*.swo
+
+# Large media — track with Git LFS instead
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Temp / scratch files
+*.bak
+*.tmp
+scratch/
