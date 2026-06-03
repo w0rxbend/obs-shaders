@@ -1,0 +1,74 @@
+// G3 — soft-drop-shadow
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Renders a soft drop shadow offset from the source, requires alpha in source
+// Chain order: Apply early; place before color grade, after any shape/mask shaders
+
+uniform float shadow_offset_x = 0.015; // -0.05 – 0.05
+uniform float shadow_offset_y = 0.02;  // -0.05 – 0.05
+uniform float shadow_blur     = 0.008; // 0.0 – 0.02
+uniform float shadow_opacity  = 0.6;   // 0.0 – 1.0
+uniform float shadow_r        = 0.0;
+uniform float shadow_g        = 0.0;
+uniform float shadow_b        = 0.0;
+uniform float2 uv_pixel_interval;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Sample the alpha channel at a given UV (clamped).
+float sampleAlpha(float2 uv)
+{
+    float2 suv = clamp(uv, 0.0, 1.0);
+    return image.Sample(textureSampler, suv).a;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Offset UV to sample the source alpha for the shadow.
+    float2 shadow_uv = uv - float2(shadow_offset_x, shadow_offset_y);
+
+    // Box-blur the shadow alpha using a 3x3 kernel scaled by shadow_blur.
+    // Kernel step size in UV units.
+    float  step_size = max(shadow_blur, 0.0001);
+    float2 px        = uv_pixel_interval;
+    float2 step_uv   = max(float2(step_size, step_size), px);
+
+    float shadow_alpha = 0.0;
+    shadow_alpha += sampleAlpha(shadow_uv + float2(-step_uv.x, -step_uv.y));
+    shadow_alpha += sampleAlpha(shadow_uv + float2( 0.0,       -step_uv.y));
+    shadow_alpha += sampleAlpha(shadow_uv + float2( step_uv.x, -step_uv.y));
+    shadow_alpha += sampleAlpha(shadow_uv + float2(-step_uv.x,  0.0      ));
+    shadow_alpha += sampleAlpha(shadow_uv + float2( 0.0,        0.0      ));
+    shadow_alpha += sampleAlpha(shadow_uv + float2( step_uv.x,  0.0      ));
+    shadow_alpha += sampleAlpha(shadow_uv + float2(-step_uv.x,  step_uv.y));
+    shadow_alpha += sampleAlpha(shadow_uv + float2( 0.0,        step_uv.y));
+    shadow_alpha += sampleAlpha(shadow_uv + float2( step_uv.x,  step_uv.y));
+    shadow_alpha /= 9.0;
+
+    // Shadow color and final alpha.
+    float3 shadow_col = float3(shadow_r, shadow_g, shadow_b);
+    float  s_alpha    = shadow_alpha * shadow_opacity;
+
+    // Composite: shadow behind source using Porter-Duff "A over B".
+    // Shadow is background, source is foreground.
+    float  out_alpha = col.a + s_alpha * (1.0 - col.a);
+    float3 out_rgb   = (col.rgb * col.a + shadow_col * s_alpha * (1.0 - col.a))
+                       / max(out_alpha, 0.0001);
+
+    return float4(out_rgb, out_alpha);
+}

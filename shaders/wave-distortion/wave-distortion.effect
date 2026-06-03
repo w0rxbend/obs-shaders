@@ -1,0 +1,42 @@
+// B8 — wave-distortion
+// Sinusoidal UV wave distortion (animated).
+// amplitude_x : horizontal wave amplitude (0.0–0.05, default 0.01)
+// amplitude_y : vertical   wave amplitude (0.0–0.05, default 0.01)
+// frequency   : wave spatial frequency    (1.0–20.0,  default 8.0)
+// speed       : animation speed           (0.0–5.0,   default 2.0)
+
+uniform float amplitude_x = 0.01;
+uniform float amplitude_y = 0.01;
+uniform float frequency   = 8.0;
+uniform float speed       = 2.0;
+
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float t = elapsed_time * speed;
+
+    // Horizontal displacement driven by a vertical sine wave
+    float dx = amplitude_x * sin(uv.y * frequency * 3.14159265 * 2.0 + t);
+    // Vertical displacement driven by a horizontal sine wave
+    float dy = amplitude_y * sin(uv.x * frequency * 3.14159265 * 2.0 + t);
+
+    float2 uvWarp = saturate(uv + float2(dx, dy));
+
+    return image.Sample(textureSampler, uvWarp);
+}

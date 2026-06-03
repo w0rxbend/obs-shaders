@@ -1,0 +1,78 @@
+// L6 — desert-western
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Dry sandy western grade — yellow-orange push, lifted blacks, faded highlights, warm vignette
+// Chain order: early in chain; pair with dust/grain overlays after
+
+uniform float4x4 ViewProj;
+uniform float sand_tint  = 0.5;  // 0.0 – 1.0
+uniform float black_lift = 0.08; // 0.0 – 0.15
+uniform float fade       = 0.2;  // 0.0 – 0.5
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float luma(float3 c)
+{
+    return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float4 col = image.Sample(textureSampler, v_in.uv);
+    float3 c   = col.rgb;
+
+    // Lift blacks — milky, bleached-out shadows
+    c = c * (1.0 - black_lift) + black_lift;
+
+    // Fade highlights — compress dynamic range at top
+    // Map [0,1] to [0, 1-fade]
+    float highlight_ceiling = 1.0 - fade * 0.6;
+    c = c * highlight_ceiling;
+
+    // Yellow-orange sand tint
+    // Push R and G up, suppress B
+    float lum = luma(c);
+    float3 sandColor = float3(1.0, 0.88, 0.55);
+    float tintStrength = sand_tint * 0.45;
+    c = lerp(c, c * sandColor, tintStrength);
+
+    // Slight warm vignette (edges go warm-dark, not cold-dark)
+    float2 centered = v_in.uv - float2(0.5, 0.5);
+    float vd = dot(centered, centered);
+    float vig = 1.0 - clamp(vd * 0.9, 0.0, 0.55);
+    float3 warmVig = float3(vig, vig * 0.96, vig * 0.88);
+    c *= warmVig;
+
+    c = clamp(c, 0.0, 1.0);
+    return float4(c, col.a);
+}
+
+technique Draw
+{
+    pass p0
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

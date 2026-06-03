@@ -1,0 +1,50 @@
+// C6 — film-gate-jitter
+// Horizontal and vertical frame jitter, frame-locked (discontinuous).
+
+uniform float h_jitter = 0.005; // 0.0 – 0.02
+uniform float v_jitter = 0.003; // 0.0 – 0.02
+uniform float speed    = 4.0;   // 1.0 – 10.0
+
+uniform texture2d image;
+uniform float elapsed_time;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float Hash11(float x)
+{
+    return frac(sin(x * 127.1) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Discrete frame index — each frame holds the same random offset
+    float frame = floor(elapsed_time * speed);
+
+    // Independent hash seeds for h and v
+    float hRand = Hash11(frame * 1.0 + 0.0) - 0.5; // -0.5 .. 0.5
+    float vRand = Hash11(frame * 1.0 + 73.1) - 0.5;
+
+    // Occasional larger lurch (~10% of frames)
+    float lurchH = step(0.90, Hash11(frame + 200.0)) * (Hash11(frame + 201.0) - 0.5) * 3.0;
+    float lurchV = step(0.93, Hash11(frame + 300.0)) * (Hash11(frame + 301.0) - 0.5) * 3.0;
+
+    hRand += lurchH;
+    vRand += lurchV;
+
+    uv.x = frac(uv.x + hRand * h_jitter * 2.0);
+    uv.y = frac(uv.y + vRand * v_jitter * 2.0);
+
+    float4 col = image.Sample(textureSampler, uv);
+    return col;
+}

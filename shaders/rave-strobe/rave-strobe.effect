@@ -1,0 +1,104 @@
+// K5 — rave-strobe
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Rapid color-cycling strobe — cycles hue and flashes white/black at rave tempo
+// Chain order: last in chain before output
+//
+// WARNING: THIS SHADER PRODUCES STROBE EFFECTS.
+// Rapid flashing lights can trigger seizures in photosensitive individuals.
+// Use only with explicit audience consent. Not suitable for broadcast or public streaming.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float    elapsed_time;
+
+uniform float bpm             = 128.0; // 60.0–200.0  — beats per minute
+uniform float hue_cycle_speed = 2.0;   // 0.0–5.0     — hue rotation speed multiplier
+uniform float flash_intensity = 0.5;   // 0.0–1.0     — white/black flash strength
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// RGB to HSV
+float3 rgb2hsv(float3 c)
+{
+    float4 K = float4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+    float4 p = (c.g < c.b) ? float4(c.bg, K.wz) : float4(c.gb, K.xy);
+    float4 q = (c.r < p.x) ? float4(p.xyw, c.r) : float4(c.r, p.yzx);
+    float d  = q.x - min(q.w, q.y);
+    float e  = 1.0e-10;
+    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+// HSV to RGB
+float3 hsv2rgb(float3 c)
+{
+    float4 K = float4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+    float3 k_xyz = float3(K.x, K.y, K.z);
+    float3 k_www = float3(K.w, K.w, K.w);
+    float3 p = abs(frac(float3(c.x, c.x, c.x) + k_xyz) * 6.0 - k_www);
+    float3 one = float3(K.x, K.x, K.x);
+    return c.z * lerp(one, saturate(p - one), c.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 src = image.Sample(textureSampler, uv);
+
+    // Beat calculation: beats per second -> phase 0..1
+    float bps   = bpm / 60.0;
+    float beat  = frac(elapsed_time * bps);      // 0..1 within current beat
+    float beat2 = frac(elapsed_time * bps * 0.5); // half-time
+
+    // Hue rotation: spin continuously at hue_cycle_speed beats/rotation
+    float hueShift = elapsed_time * bps * hue_cycle_speed * (1.0 / 6.0);
+    float3 hsv = rgb2hsv(src.rgb);
+    hsv.x      = frac(hsv.x + hueShift);
+    // Boost saturation for rave intensity
+    hsv.y      = saturate(hsv.y * 1.4 + 0.1);
+    float3 col = hsv2rgb(hsv);
+
+    // Strobe flash: white on beat hit, quick decay
+    // Flash shape: sharp attack, exponential decay over beat
+    float flashT = saturate(1.0 - beat * 8.0);     // hits on beat 0, decays over 1/8 beat
+    flashT = flashT * flashT;                        // quadratic curve for snap feel
+
+    // Alternate flash between white and colour-inverted
+    float flashSign = (frac(elapsed_time * bps * 0.5) < 0.5) ? 1.0 : -1.0;
+    float3 flashCol = (flashSign > 0.0) ? float3(1.0, 1.0, 1.0) : (1.0 - col);
+    col = lerp(col, flashCol, flashT * flash_intensity);
+
+    // Half-beat colour inversion pulse (softer)
+    float halfBeatFlash = saturate(1.0 - frac(elapsed_time * bps + 0.5) * 6.0);
+    halfBeatFlash *= halfBeatFlash;
+    col = lerp(col, 1.0 - col, halfBeatFlash * flash_intensity * 0.4);
+
+    return float4(saturate(col), src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

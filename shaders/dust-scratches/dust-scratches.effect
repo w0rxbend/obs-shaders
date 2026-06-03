@@ -1,0 +1,98 @@
+// C4 — dust-scratches
+// Procedural animated film dust spots and vertical scratch lines.
+
+uniform float dust_amount    = 0.3; // 0.0 – 1.0
+uniform float scratch_amount = 0.2; // 0.0 – 1.0
+uniform float speed          = 2.0; // 0.5 – 5.0
+
+uniform texture2d image;
+uniform float elapsed_time;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float Hash11(float x)
+{
+    return frac(sin(x * 127.1) * 43758.5453);
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Dust: sparse bright dots that appear/disappear per frame
+float DustLayer(float2 uv, float frameSeed, float density)
+{
+    // Tile uv into a grid of small cells
+    float  cellSize = 0.04;
+    float2 cell     = floor(uv / cellSize);
+    float2 local    = frac(uv  / cellSize);
+
+    // Random position and lifetime within each cell
+    float r1 = Hash21(cell + float2(frameSeed, 0.0));
+    float r2 = Hash21(cell + float2(0.0, frameSeed + 3.7));
+    float r3 = Hash21(cell + float2(frameSeed * 0.5, frameSeed + 7.1));
+
+    // Only spawn if random < density
+    if (r1 > density) return 0.0;
+
+    // Centre of dust particle inside its cell
+    float2 centre = float2(r2, r3);
+    float  dSq    = dot(local - centre, local - centre);
+    // Radius 0.05–0.25 of cell, in cell-local space
+    float  radius = 0.05 + r1 * 0.20;
+    return 1.0 - smoothstep(radius * 0.5, radius, sqrt(dSq));
+}
+
+// Vertical scratch: random thin bright/dark vertical lines
+float ScratchLayer(float2 uv, float frameSeed, float amount)
+{
+    // Choose a small number of scratch positions this frame
+    float result = 0.0;
+
+    // Unrolled loop — check 4 possible scratch lines
+    for (int i = 0; i < 4; i++)
+    {
+        float fi    = float(i);
+        float active = step(Hash11(frameSeed + fi * 17.3 + 100.0), amount);
+        float xPos   = Hash11(frameSeed + fi * 31.7 + 200.0);
+        float width  = 0.001 + Hash11(frameSeed + fi * 53.1 + 300.0) * 0.002;
+        float bright = Hash11(frameSeed + fi * 11.9 + 400.0);   // 0=dark, 1=bright
+        float dist   = abs(uv.x - xPos);
+        float mark   = 1.0 - smoothstep(0.0, width, dist);
+        // Vary scratch along Y: break it with gaps
+        float yGap   = Hash21(float2(floor(uv.y * 60.0), frameSeed + fi));
+        float gap     = step(0.15, yGap);                        // 15% chance of gap
+        result       += mark * active * gap * (0.6 + bright * 0.4);
+    }
+    return saturate(result);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv       = v_in.uv;
+    float4 col      = image.Sample(textureSampler, uv);
+
+    // Frame-locked seeds
+    float frameSeed = floor(elapsed_time * speed);
+
+    // Dust overlay — white blobs
+    float dust = DustLayer(uv, frameSeed, dust_amount * 0.5);
+    col.rgb = saturate(col.rgb + float3(dust, dust, dust) * dust_amount);
+
+    // Scratch overlay — bright thin vertical lines
+    float scratch = ScratchLayer(uv, frameSeed, scratch_amount);
+    // Mix between original and bright white at scratch location
+    col.rgb = lerp(col.rgb, float3(0.95, 0.92, 0.85), scratch * scratch_amount);
+
+    return float4(saturate(col.rgb), col.a);
+}

@@ -1,0 +1,57 @@
+// G8 — low-light-booster
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Brightens shadows, reduces noise, adds warmth — simulates AI-enhanced low-light camera
+// Chain order: Apply before color grading; first corrective pass in chain
+
+uniform float lift             = 0.15; // 0.0 – 0.5  (shadow lift)
+uniform float gamma            = 0.65; // 0.3 – 2.0  (< 1 brightens)
+uniform float warmth           = 0.12; // 0.0 – 0.5  (warm tint strength)
+uniform float denoise_strength = 0.4;  // 0.0 – 1.0
+uniform float2 uv_pixel_interval;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // --- 5-tap cross denoise (average with cardinal neighbors) ---
+    float2 px = uv_pixel_interval;
+    float4 n0 = image.Sample(textureSampler, uv + float2( px.x,  0.0 ));
+    float4 n1 = image.Sample(textureSampler, uv + float2(-px.x,  0.0 ));
+    float4 n2 = image.Sample(textureSampler, uv + float2( 0.0,   px.y));
+    float4 n3 = image.Sample(textureSampler, uv + float2( 0.0,  -px.y));
+    float4 avg = (col + n0 + n1 + n2 + n3) * 0.2;
+
+    float4 denoised = lerp(col, avg, denoise_strength);
+    float3 rgb      = denoised.rgb;
+
+    // --- Shadow lift: raise dark values ---
+    // lift shifts the entire range up; then rescale to keep whites at 1.
+    rgb = (rgb + lift) / (1.0 + lift);
+
+    // --- Gamma brighten: exponent < 1 brightens midtones ---
+    float g = max(gamma, 0.01);
+    rgb = pow(max(rgb, 0.0), float3(g, g, g));
+
+    // --- Warm tint: boost reds slightly, cool blues slightly ---
+    rgb.r = saturate(rgb.r + warmth * 0.6);
+    rgb.g = saturate(rgb.g + warmth * 0.15);
+    rgb.b = saturate(rgb.b - warmth * 0.3);
+
+    return float4(saturate(rgb), denoised.a);
+}

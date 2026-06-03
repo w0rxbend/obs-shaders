@@ -1,0 +1,75 @@
+// G1 — webcam-rounded-frame
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Rounds the webcam image with a smooth alpha mask and draws a colored border ring
+// Chain order: Apply first in chain, before color grading effects
+
+uniform float  radius         = 0.12; // 0.0 – 0.5
+uniform float  border_width   = 0.02; // 0.0 – 0.05
+uniform float  border_r       = 0.2;
+uniform float  border_g       = 0.6;
+uniform float  border_b       = 1.0;
+uniform float  border_opacity = 1.0;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// SDF for a rounded rectangle centered at 0.5,0.5 in UV space.
+// half_size = distance from center to edge along each axis (0.5 minus padding).
+// r = corner radius in UV units.
+float sdRoundedRect(float2 uv, float2 half_size, float r)
+{
+    float2 p = abs(uv - 0.5) - half_size + r;
+    return length(max(p, 0.0)) + min(max(p.x, p.y), 0.0) - r;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv    = v_in.uv;
+    float4 col   = image.Sample(textureSampler, uv);
+
+    // Aspect correction: keep radius visually circular.
+    // We work in a square UV space for the SDF.
+    float2 half_size = float2(0.5, 0.5);
+
+    // Compute SDF distance (negative = inside, positive = outside).
+    float d = sdRoundedRect(uv, half_size, clamp(radius, 0.0, 0.5));
+
+    // Soft inner mask edge (anti-aliased): 1 inside shape, 0 outside.
+    float mask = 1.0 - smoothstep(-0.002, 0.002, d);
+
+    // Border band: pixels just outside the inner mask up to border_width.
+    float border_outer = d - border_width;
+    float border_mask  = (1.0 - smoothstep(-0.002, 0.002, d))
+                       + smoothstep(-0.002, 0.002, d)
+                        * (1.0 - smoothstep(-0.002, 0.002, border_outer));
+    // Simpler: border region is where d is between 0 and border_width.
+    float in_border = smoothstep(0.002, -0.002, d) == 0.0
+                    ? smoothstep(0.002, -0.002, border_outer)
+                    : 0.0;
+    // Rewrite cleanly:
+    float inner_mask  = 1.0 - smoothstep(-0.002, 0.002, d);
+    float outer_mask  = 1.0 - smoothstep(-0.002, 0.002, d - border_width);
+    float ring        = outer_mask - inner_mask;  // 1 only in the border band
+
+    float3 border_col = float3(border_r, border_g, border_b);
+
+    // Composite: source pixels inside mask, border color in ring, transparent outside.
+    float3 rgb = lerp(col.rgb * inner_mask,
+                      border_col,
+                      ring * border_opacity);
+    float  a   = saturate(inner_mask + ring * border_opacity);
+
+    return float4(rgb, col.a * a);
+}

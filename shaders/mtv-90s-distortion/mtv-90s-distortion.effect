@@ -1,0 +1,100 @@
+// K4 — mtv-90s-distortion
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: 90s MTV look — over-saturated, chromatic aberration, scan noise, slight warp
+// Chain order: standalone or after base image correction
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float    elapsed_time;
+
+uniform float saturation = 2.5;  // 1.0–4.0
+uniform float chroma     = 0.008; // 0.0–0.02
+uniform float noise      = 0.08;  // 0.0–0.2
+uniform float warp       = 0.005; // 0.0–0.015
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise1(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + float2(1.0, 0.0));
+    float c = hash21(i + float2(0.0, 1.0));
+    float d = hash21(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Slight vertical warp — simulates tape wobble
+    float warpPhase = sin(uv.y * 12.0 + elapsed_time * 7.3) * 0.5
+                    + sin(uv.y * 3.0  + elapsed_time * 2.1) * 0.5;
+    float2 warpedUV = uv + float2(warp * warpPhase, 0.0);
+
+    // Chromatic aberration: offset R right, B left
+    float4 colR = image.Sample(textureSampler, warpedUV + float2( chroma, 0.0));
+    float4 colG = image.Sample(textureSampler, warpedUV);
+    float4 colB = image.Sample(textureSampler, warpedUV + float2(-chroma, 0.0));
+    float4 col  = float4(colR.r, colG.g, colB.b, colG.a);
+
+    // Over-saturation
+    float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    col.rgb    = lerp(float3(luma, luma, luma), col.rgb, saturation);
+    col.rgb    = saturate(col.rgb);
+
+    // Scan noise lines — horizontal band noise at video frequency
+    float scanLine  = floor(uv.y * 480.0);    // 480p grid
+    float t         = floor(elapsed_time * 30.0);
+    float lineNoise = hash21(float2(scanLine, t)) - 0.5;
+    float noiseMask = step(0.93, hash21(float2(scanLine * 0.1, t * 0.7))); // sparse lines
+    col.rgb += lineNoise * noise * noiseMask;
+
+    // Random static dots
+    float2 dotPos = uv * float2(320.0, 240.0);
+    float dotNoise = hash21(dotPos + float2(t * 0.37, t * 0.61));
+    float dotMask  = step(0.97, dotNoise);
+    col.rgb = lerp(col.rgb, float3(dotNoise, dotNoise, dotNoise), dotMask * noise * 2.0);
+
+    // Slight brightness boost for that over-lit 90s feel
+    col.rgb *= 1.08;
+    col.rgb  = saturate(col.rgb);
+
+    return float4(col.rgb, colG.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

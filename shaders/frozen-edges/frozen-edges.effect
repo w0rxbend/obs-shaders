@@ -1,0 +1,101 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Icy crystalline frost creeping in from corners for freeze/cold effects
+// Chain order: last — overlays on top of other grading
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float frost_amount   = 0.6;  // 0.0–1.0
+uniform float crystal_scale  = 12.0; // 5.0–30.0
+uniform float blue_tint      = 0.5;  // 0.0–1.0
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData v_out;
+    v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    v_out.uv  = v_in.uv;
+    return v_out;
+}
+
+// Hash for Voronoi-like cell noise
+float2 cellHash2(float2 p)
+{
+    float2 q = float2(
+        frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453),
+        frac(sin(dot(p, float2(269.5, 183.3))) * 12345.6789)
+    );
+    return q;
+}
+
+// Voronoi distance — returns min distance to nearest cell center
+float voronoi(float2 uv, float scale)
+{
+    float2 scaled = uv * scale;
+    float2 i_uv   = floor(scaled);
+    float2 f_uv   = frac(scaled);
+
+    float min_dist = 8.0;
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            float2 neighbor = float2(float(x), float(y));
+            float2 point    = cellHash2(i_uv + neighbor);
+            float2 diff     = neighbor + point - f_uv;
+            float  dist     = length(diff);
+            min_dist = min(min_dist, dist);
+        }
+    }
+    return min_dist;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Edge mask: how far from the nearest edge (0 = center, 1 = corner)
+    float2 edge_dist = min(uv, 1.0 - uv); // distance to each axis edge
+    float  edge_mask = 1.0 - smoothstep(0.0, 0.45, min(edge_dist.x, edge_dist.y));
+    edge_mask = pow(edge_mask, 1.5);
+    edge_mask *= frost_amount;
+
+    // Voronoi crystal pattern
+    float crystal = voronoi(uv, crystal_scale);
+    // Cell edges are bright (crystal facets)
+    float facet = 1.0 - smoothstep(0.0, 0.25, crystal);
+
+    // Frost color: icy blue-white
+    float3 frost_color = lerp(float3(0.55, 0.75, 1.0), float3(1.0, 1.0, 1.0), facet);
+
+    // Blend frost over original using edge mask
+    float3 result = lerp(col.rgb, frost_color, edge_mask * (0.55 + 0.45 * facet));
+
+    // Additional blue tint on non-frosted areas near edge
+    float3 blue_col = float3(col.r * 0.7, col.g * 0.85, min(col.b * 1.3, 1.0));
+    result = lerp(result, blue_col, edge_mask * blue_tint * (1.0 - facet * 0.5));
+
+    return float4(result, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

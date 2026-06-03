@@ -1,0 +1,115 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: no
+// Use case: Blue hologram with random signal cutouts, color bands, and partial horizontal desync
+// Chain order: Apply after basic color correction; stack before chromatic-aberration for extra glitch feel
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float flicker_rate    = 12.0; // 1.0–30.0
+uniform float band_count      = 8.0;  // 2.0–20.0
+uniform float blue_strength   = 0.8;  // 0.0–1.0
+uniform float dropout_chance  = 0.15; // 0.0–0.5
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash11(float p)
+{
+    return frac(sin(p * 127.1) * 43758.5453);
+}
+
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // --- Partial desync: shift rows horizontally ---
+    float row_id   = floor(uv.y * band_count);
+    float row_t    = floor(elapsed_time * flicker_rate * 0.5);
+    float row_hash = hash21(float2(row_id, row_t));
+    // Only shift some rows
+    float shift_amount = (row_hash > 0.7) ? (row_hash - 0.7) * 0.08 : 0.0;
+    if (row_hash > 0.85) shift_amount = -shift_amount; // random direction
+    uv.x = clamp(uv.x + shift_amount, 0.0, 1.0);
+
+    // --- Dropout: some band rows go black ---
+    float drop_t    = floor(elapsed_time * flicker_rate);
+    float drop_hash = hash21(float2(row_id * 3.7, drop_t));
+    bool  dropped   = (drop_hash < dropout_chance);
+
+    // --- Sample source ---
+    float4 src = image.Sample(textureSampler, uv);
+
+    // --- Desaturate ---
+    float luma = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float3 grey = float3(luma, luma, luma);
+
+    // --- Blue tint ---
+    float3 blue_col = float3(grey.r * 0.4, grey.g * 0.6, grey.b * 1.0 + luma * 0.3);
+    float3 col = lerp(grey, blue_col, blue_strength);
+
+    // --- Color bands: alternating hue shift in horizontal stripes ---
+    float band_id  = floor(uv.y * band_count * 2.5);
+    float band_t2  = floor(elapsed_time * flicker_rate * 0.25);
+    float bhash    = hash21(float2(band_id, band_t2));
+    // Occasional band gets a color cast
+    if (bhash > 0.78)
+    {
+        float band_phase = bhash * 6.28318;
+        float3 band_tint = float3(
+            0.5 + 0.5 * sin(band_phase),
+            0.5 + 0.5 * sin(band_phase + 2.094),
+            0.5 + 0.5 * sin(band_phase + 4.189)
+        );
+        col = lerp(col, col * band_tint * 1.5, 0.4);
+    }
+
+    // --- Scanlines ---
+    float scan = sin(uv.y * 600.0 + elapsed_time * 2.0) * 0.5 + 0.5;
+    col *= lerp(0.75, 1.0, pow(scan, 1.2));
+
+    // --- Global flicker ---
+    float gflick_t    = elapsed_time * flicker_rate;
+    float gflick      = hash11(floor(gflick_t));
+    float gflick_next = hash11(floor(gflick_t) + 1.0);
+    float gflicker    = lerp(gflick, gflick_next, frac(gflick_t));
+    gflicker          = lerp(0.80, 1.0, gflicker);
+    col *= gflicker;
+
+    // --- Dropout ---
+    if (dropped) col = float3(0.0, 0.0, 0.0);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

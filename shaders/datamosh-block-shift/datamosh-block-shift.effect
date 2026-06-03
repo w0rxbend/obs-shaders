@@ -1,0 +1,58 @@
+// E2 — datamosh-block-shift
+// Divides the frame into rectangular blocks. Each block hashes its coordinate
+// against time to decide whether it shifts horizontally (datamosh look).
+// block_size  : pixel block size in UV fractions (4.0–64.0, default 16.0)
+// shift_amount: max horizontal shift in UV units (0.0–0.1, default 0.03)
+// probability : fraction of blocks that shift (0.0–1.0, default 0.15)
+// speed       : time scale for block re-randomisation (0.5–5.0, default 2.0)
+
+uniform float block_size   = 16.0;
+uniform float shift_amount = 0.03;
+uniform float probability  = 0.15;
+uniform float speed        = 2.0;
+
+uniform float elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Snap time to discrete ticks so blocks hold for a frame duration
+    float tick = floor(elapsed_time * speed);
+
+    // Identify which block this pixel belongs to (in UV space, unit = 1/block_size)
+    // We use uv directly; block_size acts as a divisor across [0,1]
+    float invBlock = 1.0 / block_size;
+    float2 blockCoord = floor(uv / invBlock);
+
+    // Hash block + tick for stable but animated randomness
+    float h = hash2(blockCoord + tick * float2(0.1734, 0.9817));
+
+    // Decide if this block is active
+    float active = step(1.0 - probability, h);
+
+    // Derive shift magnitude and direction from secondary hash
+    float h2  = hash2(blockCoord * 1.7 + tick * float2(0.5311, 0.2173));
+    float shift = (h2 * 2.0 - 1.0) * shift_amount * active;
+
+    float2 shiftedUV = float2(saturate(uv.x + shift), uv.y);
+
+    return image.Sample(textureSampler, shiftedUV);
+}

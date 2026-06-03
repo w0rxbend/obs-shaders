@@ -1,0 +1,94 @@
+// O4 — torn-paper-mask
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Procedural torn/jagged edge alpha mask at bottom and sides — paper rip effect
+// Chain order: Apply before color grading; combine with paper-texture overlays
+
+uniform float4x4 ViewProj;
+uniform float tear_roughness = 0.5; // 0.0 – 1.0
+uniform float tear_scale     = 4.0; // 1.0 – 10.0  (frequency of jagged tears)
+uniform float tear_position  = 0.75; // 0.0 – 1.0  (vertical position of tear, 1 = bottom)
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Value noise helper
+float hash1(float n)
+{
+    return frac(sin(n) * 43758.5453);
+}
+
+float noise1D(float x)
+{
+    float i  = floor(x);
+    float f  = frac(x);
+    float u  = f * f * (3.0 - 2.0 * f);
+    return lerp(hash1(i), hash1(i + 1.0), u);
+}
+
+// Multi-octave 1D noise for a convincing torn edge
+float tornEdge(float x, float roughness, float scale)
+{
+    float n  = 0.0;
+    float amp = 1.0;
+    float freq = scale;
+    float total = 0.0;
+
+    for (int i = 0; i < 5; i++)
+    {
+        n     += noise1D(x * freq) * amp;
+        total += amp;
+        amp   *= roughness * 0.8 + 0.1; // roughness controls persistence
+        freq  *= 2.1;
+    }
+    return n / total;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Horizontal tear edge — varies per column (uv.x)
+    float edge_h = tear_position + (tornEdge(uv.x, tear_roughness, tear_scale) - 0.5) * tear_roughness * 0.3;
+    float alpha_h = 1.0 - smoothstep(edge_h - 0.01, edge_h + 0.01, uv.y);
+
+    // Vertical tears on the left and right sides
+    float left_edge  = (tornEdge(uv.y + 10.0, tear_roughness, tear_scale) - 0.5) * tear_roughness * 0.08;
+    float right_edge = 1.0 - (tornEdge(uv.y + 20.0, tear_roughness, tear_scale) - 0.5) * tear_roughness * 0.08;
+
+    float alpha_l = smoothstep(left_edge - 0.01, left_edge + 0.01, uv.x);
+    float alpha_r = 1.0 - smoothstep(right_edge - 0.01, right_edge + 0.01, uv.x);
+
+    float alpha = alpha_h * alpha_l * alpha_r;
+    col.a *= alpha;
+    return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

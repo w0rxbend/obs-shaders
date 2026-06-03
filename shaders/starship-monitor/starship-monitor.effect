@@ -1,0 +1,96 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: no
+// Use case: Sci-fi starship monitor display — crushed blacks, blue tint, CRT scanlines, grid overlay, phosphor glow
+// Chain order: Apply as a final display-style pass; comes after color grading, before stream output
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float blue_tint        = 0.6;  // 0.0–1.0
+uniform float scanline_strength = 0.4; // 0.0–1.0
+uniform float grid_opacity     = 0.15; // 0.0–1.0
+uniform float contrast         = 2.0;  // 1.0–4.0
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 src = image.Sample(textureSampler, uv);
+
+    // --- Crush blacks / boost contrast ---
+    // Remap: lift midpoint to create deep blacks
+    float3 col = src.rgb;
+    col = pow(saturate(col), contrast);
+    // Lift slightly to avoid pure black being too dead
+    col = saturate(col - 0.02);
+
+    // --- Blue tint ---
+    float luma = dot(col, float3(0.299, 0.587, 0.114));
+    // Monitor blue: cool with slight cyan in mids
+    float3 blue_col = float3(
+        luma * (1.0 - blue_tint * 0.45),
+        luma * (1.0 - blue_tint * 0.15),
+        luma * (1.0 + blue_tint * 0.35)
+    );
+    col = lerp(col, blue_col, blue_tint);
+    col = saturate(col);
+
+    // --- CRT Scanlines ---
+    // Fine scanlines at pixel density
+    float scan = sin(uv.y * 900.0) * 0.5 + 0.5;
+    scan = pow(scan, 1.8);
+    col *= lerp(1.0 - scanline_strength, 1.0, scan);
+
+    // --- Grid overlay ---
+    // Coarse grid simulating display tile structure
+    float grid_x = abs(sin(uv.x * 80.0 * 3.14159));
+    float grid_y = abs(sin(uv.y * 45.0 * 3.14159));
+    // Create thin grid lines (dark lines at cell borders)
+    float grid_line_x = 1.0 - pow(grid_x, 40.0);
+    float grid_line_y = 1.0 - pow(grid_y, 40.0);
+    float grid        = min(grid_line_x, grid_line_y);
+    col = col * lerp(1.0, 1.0 - grid * 0.6, grid_opacity);
+
+    // --- Phosphor glow: slight bloom emulation ---
+    // Add a soft glowing halo by brightening bright regions with a blue tint
+    float bright = saturate(luma - 0.5) * 2.0;
+    col += float3(0.0, bright * 0.03, bright * 0.08) * blue_tint;
+
+    // --- Vignette ---
+    float2 vig_uv = uv - 0.5;
+    float  vign   = 1.0 - dot(vig_uv, vig_uv) * 1.2;
+    vign = saturate(vign);
+    col *= vign;
+
+    col = saturate(col);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

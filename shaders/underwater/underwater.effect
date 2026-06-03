@@ -1,0 +1,77 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Underwater scene look with caustic ripple distortion and blue-green tint
+// Chain order: early — before color grading effects
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+uniform float ripple_strength = 0.012; // 0.0–0.03
+uniform float ripple_speed    = 1.8;   // 0.5–5.0
+uniform float blue_tint       = 0.5;   // 0.0–1.0
+uniform float blur_amount     = 0.004; // 0.0–0.01
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData v_out;
+    v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    v_out.uv  = v_in.uv;
+    return v_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float  t  = elapsed_time * ripple_speed;
+
+    // Caustic-like ripple distortion — two overlapping sine waves
+    float wave_x = sin(uv.y * 18.0 + t * 1.3) * ripple_strength;
+    float wave_y = sin(uv.x * 14.0 + t * 0.9) * ripple_strength;
+    float wave_x2 = sin(uv.y * 9.0 - t * 0.7 + uv.x * 6.0) * ripple_strength * 0.5;
+    float wave_y2 = cos(uv.x * 11.0 + t * 1.1 - uv.y * 5.0) * ripple_strength * 0.5;
+
+    float2 warp_uv = uv + float2(wave_x + wave_x2, wave_y + wave_y2);
+    warp_uv = clamp(warp_uv, 0.0, 1.0);
+
+    // Simple box-style soft blur — 5 taps along pixel interval
+    float2 px = uv_pixel_interval * blur_amount / max(uv_pixel_interval.x, 0.00001);
+    float4 col =  image.Sample(textureSampler, warp_uv);
+    col += image.Sample(textureSampler, clamp(warp_uv + float2( px.x,  0.0), 0.0, 1.0));
+    col += image.Sample(textureSampler, clamp(warp_uv + float2(-px.x,  0.0), 0.0, 1.0));
+    col += image.Sample(textureSampler, clamp(warp_uv + float2( 0.0,  px.y), 0.0, 1.0));
+    col += image.Sample(textureSampler, clamp(warp_uv + float2( 0.0, -px.y), 0.0, 1.0));
+    col /= 5.0;
+
+    // Blue-green tint overlay
+    float3 tint = float3(0.0, 0.65, 1.0);
+    float3 result = lerp(col.rgb, col.rgb * tint, blue_tint);
+
+    // Slight brightness flicker for bubble/caustic feel
+    float flicker = 0.92 + 0.08 * sin(elapsed_time * 4.7 + uv.x * 3.1);
+    result *= flicker;
+
+    return float4(result, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

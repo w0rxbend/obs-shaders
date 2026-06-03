@@ -1,0 +1,98 @@
+// Filename: shader_112_edge_readability_boost.effect
+// Category: Screen capture utility expansion
+// Effect: Edge readability boost
+// Visual principle: animated UV camera transforms around a stable center point.
+// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Suggested source type: webcam camera source, image source, video source
+// Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
+// Performance cost: low
+// Alpha safe: yes
+// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+uniform float2 uv_size;
+
+uniform float intensity = 1.15;
+uniform float amount = 1.01;
+uniform float speed = 0.65;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform float opacity = 1.0;
+uniform bool preserve_alpha = true;
+
+sampler_state textureSampler {
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float luma3(float3 c)
+{
+    return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float2 rotate2d(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float alphaOut(float sampled_alpha)
+{
+    float a = sampled_alpha;
+    [branch]
+    if (!preserve_alpha)
+    {
+        a = 1.0;
+    }
+    return a * saturate(opacity);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
+    float t = elapsed_time * speed;
+    float2 center = float2(center_x, center_y);
+    float angle = (sin(t * 0.70) + sin(t * 0.37 + 4.0) * 0.45) * 0.018 * amount * intensity;
+    float2 drift = float2(sin(t * 0.91 + 112.0), cos(t * 0.73 + 2.0)) * 0.018 * amount * intensity;
+    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
+    float2 p = (uv - center) / zoom;
+    float2 warped_uv = center + rotate2d(p, angle) - drift;
+    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+    return float4(warped.rgb, alphaOut(color.a));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

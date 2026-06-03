@@ -1,0 +1,70 @@
+// C5 — film-grain
+// Animated film grain overlay, optionally colored.
+
+uniform float strength = 0.12; // 0.0 – 0.5
+uniform float size     = 1.0;  // 0.5 – 4.0
+uniform bool  colored  = false;
+
+uniform texture2d image;
+uniform float elapsed_time;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// 2-tap smoothed grain using bilinear trick
+float Grain(float2 uv, float seed)
+{
+    // Scale UV by reciprocal of size so larger size = larger grain clumps
+    float2 scaled = uv / max(size, 0.01);
+    // Pixel grid
+    float2 i = floor(scaled);
+    float2 f = frac(scaled);
+
+    float a = Hash21(i + float2(seed, 0.0));
+    float b = Hash21(i + float2(1.0 + seed, 0.0));
+    float c = Hash21(i + float2(seed, 1.0));
+    float d = Hash21(i + float2(1.0 + seed, 1.0));
+
+    // Smooth interpolation
+    float2 u = f * f * (3.0 - 2.0 * f);
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Pixel-level UV (assuming ~1920x1080 equivalent grain density)
+    float2 pixUv   = uv * float2(1920.0, 1080.0);
+    float  seed    = floor(elapsed_time * 24.0);   // refresh at 24 fps
+
+    if (colored)
+    {
+        // Independent noise per channel for color grain
+        float gr = Grain(pixUv, seed)                * 2.0 - 1.0;
+        float gg = Grain(pixUv, seed + 37.1)         * 2.0 - 1.0;
+        float gb = Grain(pixUv, seed + 91.3)         * 2.0 - 1.0;
+        col.rgb = saturate(col.rgb + float3(gr, gg, gb) * strength);
+    }
+    else
+    {
+        float g = Grain(pixUv, seed) * 2.0 - 1.0;
+        col.rgb = saturate(col.rgb + float3(g, g, g) * strength);
+    }
+
+    return float4(col.rgb, col.a);
+}

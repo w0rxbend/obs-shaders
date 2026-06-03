@@ -1,0 +1,99 @@
+// Filename: shader_050_spirit_camera_distortion.effect
+// Category: Horror / supernatural pack
+// Effect: Spirit camera distortion
+// Visual principle: crushed shadows, color-biased darkness, pulse timing, and unstable edges.
+// What makes it cool: it adds dread by making the frame feel reactive and contaminated.
+// Suggested source type: webcam, horror games, video source, dramatic scenes
+// Suggested shader-chain combinations: this shader -> ghost double image -> dark vignette
+// Performance cost: low
+// Alpha safe: no
+// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+uniform float2 uv_size;
+
+uniform float intensity = 1.30;
+uniform float amount = 0.85;
+uniform float speed = 0.83;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform float opacity = 1.0;
+uniform bool preserve_alpha = false;
+
+sampler_state textureSampler {
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float luma3(float3 c)
+{
+    return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float2 rotate2d(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float alphaOut(float sampled_alpha)
+{
+    float a = sampled_alpha;
+    [branch]
+    if (!preserve_alpha)
+    {
+        a = 1.0;
+    }
+    return a * saturate(opacity);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
+    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
+    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
+    float gray = luma3(color.rgb);
+    float3 curse = float3(0.080, 0.020, 0.120);
+    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
+    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
+    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
+    out_rgb.r += pulse * 0.10 * intensity;
+    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
+    return float4(saturate(out_rgb), alphaOut(color.a));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

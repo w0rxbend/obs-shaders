@@ -1,0 +1,55 @@
+// G9 — bad-compression
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Simulates heavy video compression artifacts: block quantization, color banding, slight blur
+// Chain order: Apply last in chain to make the whole image look compressed
+
+uniform float block_size    = 12.0; // 4.0 – 32.0 (pixels per block)
+uniform float color_levels  = 16.0; // 4 – 32 (quantization steps per channel)
+uniform float blur_mix      = 0.3;  // 0.0 – 1.0
+uniform float2 uv_pixel_interval;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float2 px  = uv_pixel_interval;
+
+    // --- Block quantization: snap UV to the nearest block-grid point ---
+    // block_size is in pixels; convert to UV space.
+    float2 block_uv_size = px * max(block_size, 1.0);
+    float2 snapped_uv    = floor(uv / block_uv_size) * block_uv_size + block_uv_size * 0.5;
+    float2 clamped_uv    = clamp(snapped_uv, 0.0, 1.0);
+
+    float4 block_col = image.Sample(textureSampler, clamped_uv);
+
+    // --- Posterize (color banding): quantize each channel ---
+    float levels = max(color_levels, 2.0);
+    float3 posterized = floor(block_col.rgb * levels + 0.5) / levels;
+
+    // --- Slight blur: 3-tap horizontal+vertical box at original UV ---
+    float4 b0 = image.Sample(textureSampler, uv);
+    float4 b1 = image.Sample(textureSampler, clamp(uv + float2( px.x, 0.0), 0.0, 1.0));
+    float4 b2 = image.Sample(textureSampler, clamp(uv + float2(-px.x, 0.0), 0.0, 1.0));
+    float4 b3 = image.Sample(textureSampler, clamp(uv + float2(0.0,  px.y), 0.0, 1.0));
+    float4 b4 = image.Sample(textureSampler, clamp(uv + float2(0.0, -px.y), 0.0, 1.0));
+    float3 blurred = (b0.rgb + b1.rgb + b2.rgb + b3.rgb + b4.rgb) * 0.2;
+
+    // --- Composite: posterized block color blended with blur ---
+    float3 rgb = lerp(posterized, blurred, blur_mix);
+
+    return float4(saturate(rgb), block_col.a);
+}

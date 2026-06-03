@@ -1,0 +1,62 @@
+// VHS Unstable Frame Drift
+// Wandering analog frame drift with subtle horizontal instability.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+
+uniform float speed = 0.9;
+uniform float amount = 1.0;
+uniform float zoom_compensation = 0.045;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform bool strong_preset = false;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float hash11(float n)
+{
+    return frac(sin(n * 67.3) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float t = elapsed_time * speed;
+    float preset = strong_preset ? 3.0 : 1.0;
+    float2 center = float2(center_x, center_y);
+    float frame = floor(t * 8.0);
+    float wander = sin(t * 0.9) * 0.011 + (hash11(frame) - 0.5) * 0.006;
+    float vertical = sin(t * 0.43 + 1.8) * 0.006;
+    float line_drift = sin(v_in.uv.y * 34.0 + t * 3.0) * 0.0025;
+    float2 offset = float2(wander + line_drift, vertical) * amount * preset;
+
+    float zoom = 1.0 + max(0.0, zoom_compensation) + length(offset) * 2.5;
+    float2 uv = center + (v_in.uv - center) / zoom - offset;
+    return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

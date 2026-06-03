@@ -1,0 +1,89 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: VHS channel-change transition — horizontal noise wipe with chroma aberration
+// Chain order: Apply last; stack after vhs-tracking for full VHS stack
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float progress       = 0.5;   // 0.0 = clean signal, 1.0 = fully wiped to static
+uniform float noise_strength = 0.3;   // 0.0–0.5 intensity of static noise bands
+uniform float chroma         = 0.012; // 0.0–0.03 chromatic separation amount
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash1(float n)
+{
+    return frac(sin(n * 127.1) * 43758.5453);
+}
+
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv    = v_in.uv;
+
+    // --- Chroma-shift sample (aberration widens as progress increases) ---
+    float  shift = chroma * progress * 2.0;
+    float  rr    = image.Sample(textureSampler, uv + float2(-shift, 0.0)).r;
+    float  gg    = image.Sample(textureSampler, uv).g;
+    float  bb    = image.Sample(textureSampler, uv + float2( shift, 0.0)).b;
+    float  aa    = image.Sample(textureSampler, uv).a;
+    float4 color = float4(rr, gg, bb, aa);
+
+    // --- VHS noise bands (horizontal stripes of static) ---
+    // Bands migrate vertically with a time-like hash seeded on progress
+    float  bandSeed = hash1(floor(progress * 37.0));
+    float  bandFreq = 12.0;
+    float  bandY    = frac(uv.y * bandFreq + bandSeed);
+
+    // Static grain per pixel
+    float  grain    = hash2(uv * float2(213.7, 97.3) + float2(progress * 100.0, 0.0));
+
+    // Band mask: narrow bands of heavy static
+    float  bandMask = smoothstep(0.55, 0.65, bandY) * noise_strength * progress * 2.0;
+    bandMask        = clamp(bandMask, 0.0, 1.0);
+
+    // Mix static into the color
+    float  staticV  = grain;
+    color.rgb       = lerp(color.rgb, float3(staticV, staticV, staticV), bandMask);
+
+    // --- Global wipe: top half goes first, driven by progress ---
+    // The wipe sweeps from top (uv.y=0) to bottom (uv.y=1)
+    float  edgeY    = progress;
+    float  noiseOff = (hash1(floor(uv.y * 80.0)) - 0.5) * noise_strength * 0.25;
+    float  wipeAlpha = 1.0 - smoothstep(edgeY + noiseOff - 0.02, edgeY + noiseOff + 0.02, uv.y);
+
+    color.a        *= wipeAlpha;
+    return color;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

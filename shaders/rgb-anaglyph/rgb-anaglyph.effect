@@ -1,0 +1,42 @@
+// B5 — rgb-anaglyph
+// Fake 3D red-cyan anaglyph — shifts R channel left, GB channels right.
+// separation    : horizontal UV offset (0.0–0.05, default 0.008)
+// vertical_shift: vertical UV offset   (0.0–0.02,  default 0.0)
+
+uniform float separation     = 0.008;
+uniform float vertical_shift = 0.0;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Left eye (red): shift UV left and slightly up
+    float2 uvLeft  = saturate(uv + float2(-separation,  vertical_shift));
+    // Right eye (cyan): shift UV right and slightly down
+    float2 uvRight = saturate(uv + float2( separation, -vertical_shift));
+
+    float4 colLeft  = image.Sample(textureSampler, uvLeft);
+    float4 colRight = image.Sample(textureSampler, uvRight);
+
+    // Anaglyph: red from left eye, green+blue from right eye
+    float4 result;
+    result.r = colLeft.r;
+    result.g = colRight.g;
+    result.b = colRight.b;
+    result.a = max(colLeft.a, colRight.a);
+
+    return result;
+}

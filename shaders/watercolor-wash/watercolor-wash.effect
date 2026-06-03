@@ -1,0 +1,108 @@
+// F6 — watercolor-wash
+// Soft watercolour look: blurred colours, boosted saturation, paper-texture noise.
+
+uniform float4x4 ViewProj;
+uniform float blur_amount    = 4.0;  // 0.0 – 10.0  blur radius in pixels
+uniform float saturation     = 1.3;  // 0.5 – 2.0   colour saturation multiplier
+uniform float paper_strength = 0.1;  // 0.0 – 0.3   paper-texture grain intensity
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Simple pseudo-random hash for procedural paper grain.
+float hash(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Multi-octave noise for paper texture.
+float paperNoise(float2 p)
+{
+    float v = 0.0;
+    float a = 0.5;
+    float2 fp = p;
+    for (int i = 0; i < 4; i++)
+    {
+        // Bilinear interpolated lattice noise.
+        float2 ip  = floor(fp);
+        float2 f   = frac(fp);
+        float2 u   = f * f * (3.0 - 2.0 * f);
+        float  n00 = hash(ip + float2(0.0, 0.0));
+        float  n10 = hash(ip + float2(1.0, 0.0));
+        float  n01 = hash(ip + float2(0.0, 1.0));
+        float  n11 = hash(ip + float2(1.0, 1.0));
+        float  n   = lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y);
+        v  += a * n;
+        a  *= 0.5;
+        fp *= 2.0;
+    }
+    return v;
+}
+
+// 9-tap box blur centred on uv with pixel offset `scale`.
+float4 boxBlur(float2 uv, float scale)
+{
+    float2 px    = uv_pixel_interval * scale;
+    float4 accum = float4(0.0, 0.0, 0.0, 0.0);
+    accum += image.Sample(textureSampler, uv + float2(-px.x, -px.y));
+    accum += image.Sample(textureSampler, uv + float2(  0.0, -px.y));
+    accum += image.Sample(textureSampler, uv + float2( px.x, -px.y));
+    accum += image.Sample(textureSampler, uv + float2(-px.x,   0.0));
+    accum += image.Sample(textureSampler, uv);
+    accum += image.Sample(textureSampler, uv + float2( px.x,   0.0));
+    accum += image.Sample(textureSampler, uv + float2(-px.x,  px.y));
+    accum += image.Sample(textureSampler, uv + float2(  0.0,  px.y));
+    accum += image.Sample(textureSampler, uv + float2( px.x,  px.y));
+    return accum / 9.0;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Multi-scale blur approximation (two passes at different radii averaged).
+    float4 b1 = boxBlur(uv, blur_amount);
+    float4 b2 = boxBlur(uv, blur_amount * 1.6);
+    float4 blurred = (b1 * 0.6 + b2 * 0.4);
+
+    // Saturation adjustment in RGB space via luminance.
+    float lum = dot(blurred.rgb, float3(0.299, 0.587, 0.114));
+    float3 saturated = lerp(float3(lum, lum, lum), blurred.rgb, saturation);
+    saturated = saturate(saturated);
+
+    // Paper texture: high-frequency noise modulates brightness slightly.
+    float2 paperUV = uv / uv_pixel_interval * 0.15; // scale to screen pixels
+    float  grain   = paperNoise(paperUV) - 0.5;       // [-0.5, +0.5)
+    float3 col     = saturate(saturated + float3(grain, grain, grain) * paper_strength);
+
+    return float4(col, blurred.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

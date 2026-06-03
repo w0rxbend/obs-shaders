@@ -1,0 +1,77 @@
+// F4 — ink-outline
+// Sobel edge detection draws black ink outlines over the original image.
+
+uniform float4x4 ViewProj;
+uniform float thickness       = 1.5;  // 0.5 – 5.0   edge sample radius in pixels
+uniform float threshold       = 0.15; // 0.0 – 1.0   minimum edge strength to draw
+uniform float outline_opacity = 0.9;  // 0.0 – 1.0   opacity of the black outline
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float lum(float2 uv)
+{
+    float4 c = image.Sample(textureSampler, uv);
+    return dot(c.rgb, float3(0.299, 0.587, 0.114));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float2 px = uv_pixel_interval * thickness;
+
+    // 3×3 Sobel neighbourhood.
+    float tl = lum(uv + float2(-px.x, -px.y));
+    float tc = lum(uv + float2(  0.0, -px.y));
+    float tr = lum(uv + float2( px.x, -px.y));
+    float ml = lum(uv + float2(-px.x,   0.0));
+    float mr = lum(uv + float2( px.x,   0.0));
+    float bl = lum(uv + float2(-px.x,  px.y));
+    float bc = lum(uv + float2(  0.0,  px.y));
+    float br = lum(uv + float2( px.x,  px.y));
+
+    float gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+    float gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+    float edge = sqrt(gx * gx + gy * gy);
+
+    // Threshold: anything below threshold is not an outline.
+    float outlineMask = saturate((edge - threshold) / max(threshold, 0.001));
+
+    float4 src     = image.Sample(textureSampler, uv);
+    float3 inkLine = float3(0.0, 0.0, 0.0);
+
+    // Blend black outline over source colour.
+    float blendFactor = outlineMask * outline_opacity;
+    float3 col = lerp(src.rgb, inkLine, blendFactor);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

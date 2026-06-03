@@ -1,0 +1,62 @@
+// Slow Handheld Camera Sway
+// Smooth handheld-style source drift using animated UV offsets.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+
+uniform float speed = 0.55;
+uniform float amount = 1.0;
+uniform float zoom_compensation = 0.045;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform bool strong_preset = false;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float2 rotate2d(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float t = elapsed_time * speed;
+    float preset = strong_preset ? 2.8 : 1.0;
+    float2 center = float2(center_x, center_y);
+    float2 offset = float2(sin(t * 0.87), sin(t * 1.13 + 1.7)) * 0.010 * amount * preset;
+    float angle = sin(t * 0.72 + 0.4) * 0.007 * amount * preset;
+    float zoom = 1.0 + max(0.0, zoom_compensation) + length(offset) * 2.0 + abs(angle);
+
+    float2 p = (v_in.uv - center) / zoom;
+    float2 uv = center + rotate2d(p, angle) - offset;
+    return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

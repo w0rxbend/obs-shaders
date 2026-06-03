@@ -1,0 +1,77 @@
+// N5 — liquid-metal
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Animated mercury/liquid UV warp with metallic color boost
+// Chain order: After base color corrections; combine with chromatic-aberration for extra liquid feel
+
+uniform float4x4 ViewProj;
+uniform float flow_speed     = 1.0;   // 0.0–3.0
+uniform float warp_strength  = 0.025; // 0.0–0.05
+uniform float metallic_boost = 0.4;   // 0.0–1.0
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float  t  = elapsed_time * flow_speed;
+
+    // Layered sine-wave UV distortion (mercury ripple)
+    float dx = 0.0;
+    float dy = 0.0;
+
+    // Layer 1 — large slow wave
+    dx += sin(uv.y * 6.2832 * 1.3 + t * 0.7) * warp_strength;
+    dy += cos(uv.x * 6.2832 * 1.1 + t * 0.9) * warp_strength;
+
+    // Layer 2 — medium wave at 45-degree direction
+    float diag = uv.x * 0.707 + uv.y * 0.707;
+    dx += sin(diag * 6.2832 * 2.1 + t * 1.3) * warp_strength * 0.6;
+    dy += cos(diag * 6.2832 * 1.7 - t * 1.1) * warp_strength * 0.6;
+
+    // Layer 3 — fast fine ripple
+    dx += sin(uv.y * 6.2832 * 5.0 - t * 2.0) * warp_strength * 0.3;
+    dy += cos(uv.x * 6.2832 * 4.0 + t * 1.8) * warp_strength * 0.3;
+
+    float2 sampleUV = clamp(uv + float2(dx, dy), 0.0, 1.0);
+    float4 col      = image.Sample(textureSampler, sampleUV);
+
+    // Metallic boost: push highlights toward silver-white
+    // Luminance of sample
+    float lum = dot(col.rgb, float3(0.2126, 0.7152, 0.0722));
+    // Blend toward over-bright version for specular metallic look
+    float3 metallic = lerp(col.rgb, col.rgb * 1.5 + float3(0.1, 0.1, 0.15), metallic_boost * lum);
+
+    return float4(clamp(metallic, 0.0, 1.0), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

@@ -1,0 +1,57 @@
+// G6 — webcam-glass-reflection
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Overlays a subtle specular glare streak simulating camera glass reflection
+// Chain order: Apply near the end, after color grading but before output
+
+uniform float glare_x         = 0.6;     // 0.0 – 1.0  (center X of glare)
+uniform float glare_y         = 0.25;    // 0.0 – 1.0  (center Y of glare)
+uniform float glare_width     = 0.06;    // 0.01 – 0.2 (cross-axis half-width)
+uniform float glare_length    = 0.4;     // 0.1 – 1.0  (along-axis half-length)
+uniform float glare_intensity = 0.18;    // 0.0 – 1.0
+uniform float glare_angle     = 0.5;     // 0.0 – 3.14159 (radians)
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Translate UV relative to glare center.
+    float2 p = uv - float2(glare_x, glare_y);
+
+    // Rotate into glare-local frame.
+    float cosA = cos(glare_angle);
+    float sinA = sin(glare_angle);
+    float  local_u =  cosA * p.x + sinA * p.y; // along glare axis
+    float  local_v = -sinA * p.x + cosA * p.y; // across glare axis
+
+    // Normalized distances along each axis.
+    float du = local_u / max(glare_length, 0.001);
+    float dv = local_v / max(glare_width,  0.001);
+
+    // Elongated ellipse SDF: smooth falloff.
+    float ellipse_dist = sqrt(du * du + dv * dv);
+    float glare_mask   = 1.0 - smoothstep(0.0, 1.0, ellipse_dist);
+
+    // Subtle white glare, stronger at center with cubic falloff.
+    float glare_val = glare_mask * glare_mask * glare_intensity;
+
+    // Additive blend of specular white highlight.
+    float3 rgb = saturate(col.rgb + float3(glare_val, glare_val, glare_val));
+
+    return float4(rgb, col.a);
+}

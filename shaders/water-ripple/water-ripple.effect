@@ -1,0 +1,51 @@
+// B10 — water-ripple
+// Concentric water ripple expanding from a configurable center point (animated).
+// speed     : ripple expansion speed   (0.0–5.0,  default 2.0)
+// frequency : number of ripple rings   (5.0–50.0, default 20.0)
+// strength  : displacement magnitude   (0.0–0.05, default 0.02)
+// center_x  : ripple origin X          (0.0–1.0,  default 0.5)
+// center_y  : ripple origin Y          (0.0–1.0,  default 0.5)
+
+uniform float speed     = 2.0;
+uniform float frequency = 20.0;
+uniform float strength  = 0.02;
+uniform float center_x  = 0.5;
+uniform float center_y  = 0.5;
+
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv     = v_in.uv;
+    float2 center = float2(center_x, center_y);
+
+    float2 delta = uv - center;
+    float  r     = length(delta);
+
+    // Avoid division by zero at the exact center
+    float2 dir = (r > 0.0001) ? delta / r : float2(0.0, 0.0);
+
+    // Sine ripple: expands outward (r increases → phase decreases over time)
+    float phase   = r * frequency - elapsed_time * speed;
+    float ripple  = sin(phase * 3.14159265 * 2.0);
+
+    // Attenuate displacement near the center and at large distances
+    float atten   = r * exp(-r * 4.0);
+
+    float2 uvWarp = saturate(uv + dir * ripple * atten * strength);
+
+    return image.Sample(textureSampler, uvWarp);
+}

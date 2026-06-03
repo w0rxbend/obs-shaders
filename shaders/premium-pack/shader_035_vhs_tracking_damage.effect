@@ -1,0 +1,106 @@
+// Filename: shader_035_vhs_tracking_damage.effect
+// Category: Retro analog pack
+// Effect: VHS tracking damage
+// Visual principle: scanlines, field jitter, chroma drift, and time-varying tape damage.
+// What makes it cool: it sells nostalgic hardware instability with cheap procedural math.
+// Suggested source type: game capture, retro scenes, video source, screen capture
+// Suggested shader-chain combinations: this shader -> chromatic aberration -> vignette
+// Performance cost: medium
+// Alpha safe: no
+// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+uniform float2 uv_size;
+
+uniform float intensity = 1.30;
+uniform float amount = 0.85;
+uniform float speed = 0.65;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform float opacity = 1.0;
+uniform bool preserve_alpha = false;
+
+sampler_state textureSampler {
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float luma3(float3 c)
+{
+    return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float2 rotate2d(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float alphaOut(float sampled_alpha)
+{
+    float a = sampled_alpha;
+    [branch]
+    if (!preserve_alpha)
+    {
+        a = 1.0;
+    }
+    return a * saturate(opacity);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
+    float t = elapsed_time * speed;
+    float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
+    float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
+    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
+    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
+    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
+    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
+    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
+    float rch = image.Sample(textureSampler, uv_r).r;
+    float gch = image.Sample(textureSampler, uv_g).g;
+    float bch = image.Sample(textureSampler, uv_b).b;
+    float noise = hash12(floor(uv * uv_size / 3.0) + floor(t * 20.0)) - 0.5;
+    float3 tint = float3(0.900, 0.200, 0.180);
+    float3 out_rgb = float3(rch, gch, bch) * scan;
+    out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
+    out_rgb += noise * 0.08 * intensity;
+    return float4(saturate(out_rgb), alphaOut(color.a));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

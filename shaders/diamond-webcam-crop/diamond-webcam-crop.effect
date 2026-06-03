@@ -1,0 +1,64 @@
+// O3 — diamond-webcam-crop
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Crops webcam feed to a diamond (rotated square) shape; outside = alpha 0
+// Chain order: Apply first in chain before any color grading
+
+uniform float4x4 ViewProj;
+uniform float size     = 0.45; // 0.1 – 0.8
+uniform float softness = 0.008; // 0.001 – 0.05
+uniform float aspect   = 1.0;  // horizontal stretch of the diamond
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Diamond SDF: L1 norm distance from origin
+// Returns signed distance; negative = inside, positive = outside
+float sdfDiamond(float2 p, float r)
+{
+    // Scale x by aspect inverse so "aspect" stretches the shape horizontally
+    p.x /= max(aspect, 0.001);
+    return dot(abs(p), float2(1.0, 1.0)) - r;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    float2 p   = uv - float2(0.5, 0.5);
+    float  d   = sdfDiamond(p, size);
+
+    float  alpha = 1.0 - smoothstep(-softness, softness, d);
+
+    col.a *= alpha;
+    return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

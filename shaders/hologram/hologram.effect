@@ -1,0 +1,110 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: no
+// Use case: Semi-transparent cyan hologram overlay — desaturates source, applies cyan tint, scanlines, animated flicker, and UV warp
+// Chain order: Apply early in chain before color grading; combine with glow-bloom after for extra pop
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float opacity        = 0.75; // 0.0–1.0
+uniform float scan_speed     = 1.5;  // 0.0–5.0
+uniform float flicker_speed  = 6.0;  // 1.0–20.0
+uniform float warp_strength  = 0.004; // 0.0–0.01
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Simple hash for noise
+float hash11(float p)
+{
+    return frac(sin(p * 127.1) * 43758.5453);
+}
+
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // --- UV warp: horizontal sine displacement ---
+    float warp_phase = uv.y * 18.0 + elapsed_time * 3.5;
+    float warp_x     = sin(warp_phase) * warp_strength;
+    // Secondary warp at different frequency
+    float warp_x2    = sin(uv.y * 47.0 + elapsed_time * 1.7) * (warp_strength * 0.4);
+    uv.x += warp_x + warp_x2;
+    uv = clamp(uv, 0.0, 1.0);
+
+    // --- Sample source ---
+    float4 src = image.Sample(textureSampler, uv);
+
+    // --- Desaturate ---
+    float luma = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float3 desat = float3(luma, luma, luma);
+
+    // --- Cyan tint ---
+    // Cyan = (0, 1, 1); blend desaturated image toward cyan
+    float3 cyan_tint = float3(0.0, 1.0, 1.0);
+    float3 col = lerp(desat, desat * cyan_tint * 1.4, 0.85);
+    // Add slight brightness boost on light areas
+    col += float3(0.0, luma * 0.15, luma * 0.15);
+
+    // --- Scanlines ---
+    float scan_y   = uv.y + elapsed_time * scan_speed * 0.1;
+    float scanline  = sin(scan_y * 800.0) * 0.5 + 0.5; // 0..1
+    scanline        = pow(scanline, 1.5);
+    // Dim dark scanline bands slightly
+    col *= lerp(0.72, 1.0, scanline);
+
+    // --- Animated flicker ---
+    // Coarse time-band flicker (row-based dropout)
+    float band_t    = floor(elapsed_time * flicker_speed);
+    float band_hash = hash21(float2(floor(uv.y * 40.0), band_t));
+    float row_flick = (band_hash > 0.92) ? 0.55 : 1.0;
+
+    // Global brightness flicker
+    float global_t    = elapsed_time * flicker_speed;
+    float global_hash = hash11(floor(global_t));
+    float next_hash   = hash11(floor(global_t) + 1.0);
+    float global_flic = lerp(global_hash, next_hash, frac(global_t));
+    global_flic       = lerp(0.85, 1.0, global_flic);
+
+    col *= row_flick * global_flic;
+
+    // --- Edge vignette (hologram fades at outer edges) ---
+    float2 edge = abs(v_in.uv - 0.5) * 2.0; // 0..1 from center to edge
+    float vign  = 1.0 - saturate(dot(edge, edge) * 0.4);
+    col *= vign;
+
+    // --- Output with opacity ---
+    return float4(col, src.a * opacity);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

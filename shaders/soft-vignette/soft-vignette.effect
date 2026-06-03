@@ -1,0 +1,44 @@
+// A2 — soft-vignette
+// Darkens edges with a smooth elliptical gradient.
+
+uniform float strength = 0.5;  // 0.0 – 1.0
+uniform float softness = 0.5;  // 0.0 – 1.0
+uniform float aspect   = 1.78; // width/height ratio
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Center UV, correct for aspect ratio
+    float2 centered = uv - 0.5;
+    centered.x *= aspect;
+
+    // Distance from center in elliptical space
+    float dist = length(centered);
+
+    // Vignette factor: 0 at center, 1 at edges
+    // softness controls the gradient width; clamp to avoid divide-by-zero
+    float soft    = max(softness, 0.001);
+    float inner   = 0.5 - soft * 0.5;
+    float outer   = 0.5 + soft * 0.5;
+    float vignette = smoothstep(inner, outer, dist);
+
+    // Apply darkening
+    float darken = 1.0 - vignette * strength;
+    col.rgb *= darken;
+    return col;
+}

@@ -1,0 +1,86 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Electric shock effect with RGB channel splitting, white flash, and random pulse
+// Chain order: last — dramatic override on top of everything
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float shock_speed     = 8.0;  // 1.0–20.0
+uniform float rgb_split       = 0.02; // 0.0–0.04
+uniform float flash_intensity = 0.4;  // 0.0–1.0
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData v_out;
+    v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    v_out.uv  = v_in.uv;
+    return v_out;
+}
+
+// Scalar hash from float — used for frame-snapped randomness
+float hash1(float n)
+{
+    return frac(sin(n * 127.1) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Frame-snapped time — changes discretely at shock_speed Hz
+    float snapped = floor(elapsed_time * shock_speed);
+
+    // Per-frame random values
+    float r0 = hash1(snapped);
+    float r1 = hash1(snapped + 13.7);
+    float r2 = hash1(snapped + 27.3);
+    float r3 = hash1(snapped + 41.9);
+
+    // Pulse gate: shock fires ~30% of frames
+    float active = step(0.7, r0);
+
+    // RGB channel split offsets — random direction each pulse
+    float split = rgb_split * active;
+    float2 split_r = float2( split * (r1 * 2.0 - 1.0),  split * (r2 * 2.0 - 1.0) * 0.3);
+    float2 split_b = float2(-split * (r1 * 2.0 - 1.0), -split * (r2 * 2.0 - 1.0) * 0.3);
+
+    float red   = image.Sample(textureSampler, clamp(uv + split_r, 0.0, 1.0)).r;
+    float green = image.Sample(textureSampler, uv).g;
+    float blue  = image.Sample(textureSampler, clamp(uv + split_b, 0.0, 1.0)).b;
+    float alpha = image.Sample(textureSampler, uv).a;
+
+    float3 col = float3(red, green, blue);
+
+    // White flash
+    float flash = r3 * flash_intensity * active;
+    col = lerp(col, float3(1.0, 1.0, 1.0), flash);
+
+    // Subtle scanline twitch on active frames
+    float twitch_line = step(0.97, frac(uv.y * 80.0 + r1 * 40.0));
+    col = lerp(col, float3(1.0, 1.0, 1.0), twitch_line * active * 0.5);
+
+    return float4(col, alpha);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

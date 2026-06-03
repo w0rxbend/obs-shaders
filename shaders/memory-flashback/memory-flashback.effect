@@ -1,0 +1,67 @@
+// Q3 — memory-flashback
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Sepia/warm tone, blown highlights, edge vignette, intermittent brightness flare
+// Chain order: standalone or after base color grade
+
+uniform float sepia_amount  = 0.7; // 0.0 – 1.0
+uniform float flash_speed   = 1.0; // 0.0 – 3.0
+uniform float vignette      = 0.5; // 0.0 – 1.0
+
+uniform float     elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // -- Sepia tone -------------------------------------------------------
+    float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    // Classic sepia matrix output
+    float3 sepiaCol;
+    sepiaCol.r = saturate(luma * 1.07 + 0.10);
+    sepiaCol.g = saturate(luma * 0.93 + 0.05);
+    sepiaCol.b = saturate(luma * 0.70 - 0.02);
+    float3 rgb = lerp(col.rgb, sepiaCol, sepia_amount);
+
+    // -- Warm blown highlights: push bright areas toward warm white -------
+    float highlightMask = smoothstep(0.65, 1.0, luma);
+    float3 warmWhite    = float3(1.05, 0.98, 0.88);
+    rgb = lerp(rgb, warmWhite, highlightMask * sepia_amount * 0.6);
+
+    // -- Intermittent brightness flare ------------------------------------
+    // Flash: positive sharp peak using a rectified sine burst
+    float flashCycle = sin(elapsed_time * flash_speed * 3.14159);
+    // Only the positive lobe, squared for sharpness
+    float flash      = max(flashCycle, 0.0);
+    flash            = pow(flash, 3.0);
+    // Secondary irregular flash
+    float flash2     = max(sin(elapsed_time * flash_speed * 3.14159 * 2.3 + 1.1), 0.0);
+    flash2           = pow(flash2, 5.0);
+    float totalFlash = saturate(flash * 0.7 + flash2 * 0.5);
+
+    rgb = rgb + totalFlash * 0.55 * float3(1.0, 0.95, 0.80);
+    rgb = saturate(rgb);
+
+    // -- Edge vignette (warm dark) ----------------------------------------
+    float2 centered = uv * 2.0 - 1.0;
+    float  edgeDist  = dot(centered, centered); // squared distance from center
+    float  vigMask   = smoothstep(0.4, 1.6, edgeDist);
+    float3 vigColor  = float3(0.08, 0.05, 0.02);
+    rgb = lerp(rgb, vigColor, vigMask * vignette);
+
+    return float4(saturate(rgb), col.a);
+}

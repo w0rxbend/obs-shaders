@@ -1,0 +1,55 @@
+// Floating Head Cam
+// Gentle bob and minor scale change for face-cam style sources.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+
+uniform float speed = 0.7;
+uniform float amount = 1.0;
+uniform float zoom_compensation = 0.04;
+uniform float center_x = 0.5;
+uniform float center_y = 0.45;
+uniform bool strong_preset = false;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float t = elapsed_time * speed;
+    float preset = strong_preset ? 2.8 : 1.0;
+    float2 center = float2(center_x, center_y);
+    float bob = sin(t) * 0.014 * amount * preset;
+    float sway = sin(t * 0.57 + 1.1) * 0.006 * amount * preset;
+    float breathe_zoom = (sin(t * 1.11 + 0.6) * 0.5 + 0.5) * 0.012 * amount * preset;
+    float zoom = 1.0 + max(0.0, zoom_compensation) + breathe_zoom + abs(bob) * 1.2;
+
+    float2 uv = center + (v_in.uv - center) / zoom - float2(sway, bob);
+    return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

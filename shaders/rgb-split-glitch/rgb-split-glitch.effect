@@ -1,0 +1,72 @@
+// E1 — rgb-split-glitch
+// Animated RGB channel split with random glitch timing.
+// Channels tear apart horizontally using time-driven hash snapping.
+// strength        : max channel offset in UV units (0.0–0.05, default 0.015)
+// glitch_speed    : how fast the random offset changes (0.0–10.0, default 5.0)
+// glitch_frequency: fraction of time the glitch is active (0.0–1.0, default 0.3)
+
+uniform float strength         = 0.015;
+uniform float glitch_speed     = 5.0;
+uniform float glitch_frequency = 0.3;
+
+uniform float elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Cheap 1-D hash: returns [0, 1)
+float hash1(float t)
+{
+    return frac(sin(t * 127.1) * 43758.5453);
+}
+
+// 2-D hash for band-level flicker
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Quantize time into discrete "glitch frames" at glitch_speed ticks/sec
+    float tick = floor(elapsed_time * glitch_speed);
+
+    // Global glitch gate — is this tick an active glitch?
+    float gateHash = hash1(tick * 0.3171);
+    float gate = step(1.0 - glitch_frequency, gateHash);
+
+    // Per-scanline band (8 pixel-high bands in UV space)
+    float band      = floor(uv.y * 32.0);
+    float bandHash  = hash2(float2(band, tick));
+    float bandGate  = step(1.0 - glitch_frequency, bandHash) * gate;
+
+    // Offset magnitudes per channel, snapped each tick
+    float offR = (hash1(tick * 1.0)        * 2.0 - 1.0) * strength * gate;
+    float offG = (hash1(tick * 2.3 + 5.7)  * 2.0 - 1.0) * strength * gate * 0.5;
+    float offB = (hash1(tick * 3.7 + 11.3) * 2.0 - 1.0) * strength * gate;
+
+    // Band-level secondary jitter layered on top
+    float bandOff = (bandHash * 2.0 - 1.0) * strength * bandGate;
+
+    float uvR = saturate(uv.x + offR + bandOff);
+    float uvG = saturate(uv.x + offG);
+    float uvB = saturate(uv.x + offB - bandOff);
+
+    float r = image.Sample(textureSampler, float2(uvR, uv.y)).r;
+    float g = image.Sample(textureSampler, float2(uvG, uv.y)).g;
+    float b = image.Sample(textureSampler, float2(uvB, uv.y)).b;
+    float a = image.Sample(textureSampler, uv).a;
+
+    return float4(r, g, b, a);
+}

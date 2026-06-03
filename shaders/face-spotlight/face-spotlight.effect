@@ -1,0 +1,47 @@
+// G4 — face-spotlight
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Vignette darkens everything except a spotlight ellipse centered on the face area
+// Chain order: Apply before color grading; combine with webcam-rounded-frame for full frame effect
+
+uniform float center_x  = 0.5;  // 0.0 – 1.0
+uniform float center_y  = 0.45; // 0.0 – 1.0
+uniform float radius_x  = 0.22; // 0.05 – 0.5
+uniform float radius_y  = 0.28; // 0.05 – 0.5
+uniform float darkness  = 0.7;  // 0.0 – 1.0
+uniform float softness  = 0.4;  // 0.0 – 1.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Normalized distance from center, scaled by per-axis radius.
+    float2 center = float2(center_x, center_y);
+    float2 delta  = (uv - center) / max(float2(radius_x, radius_y), 0.001);
+    float  dist   = length(delta);
+
+    // Inner edge of the soft falloff at dist=1, outer at dist = 1+softness.
+    float soft_outer = 1.0 + max(softness, 0.001);
+    float spotlight  = 1.0 - smoothstep(1.0, soft_outer, dist);
+
+    // darken = 0 at spotlight center (no darkening), darkness at far edges.
+    float darken = (1.0 - spotlight) * darkness;
+
+    col.rgb *= (1.0 - darken);
+    return col;
+}

@@ -1,0 +1,111 @@
+// F10 — rusted-industrial
+// Desaturates and colourises toward orange-brown rust tones,
+// adds high-frequency texture noise, and applies a heavy vignette.
+
+uniform float4x4 ViewProj;
+uniform float rust_strength   = 0.7;   // 0.0 – 1.0  blend toward rust palette
+uniform float texture_scale   = 15.0;  // 5.0 – 30.0 spatial scale of rust texture noise
+uniform float vignette        = 0.5;   // 0.0 – 1.0  edge darkening strength
+uniform float warmth          = 0.6;   // 0.0 – 1.0  overall warm (orange) colour push
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float vnoise(float2 p)
+{
+    float2 ip = floor(p);
+    float2 f  = frac(p);
+    float2 u  = f * f * (3.0 - 2.0 * f);
+    float n00 = hash(ip + float2(0.0, 0.0));
+    float n10 = hash(ip + float2(1.0, 0.0));
+    float n01 = hash(ip + float2(0.0, 1.0));
+    float n11 = hash(ip + float2(1.0, 1.0));
+    return lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y);
+}
+
+// High-frequency fractal noise for surface texture.
+float rustTexture(float2 p)
+{
+    float v = 0.0;
+    float a = 0.5;
+    float2 fp = p;
+    for (int i = 0; i < 5; i++)
+    {
+        v  += a * vnoise(fp);
+        a  *= 0.5;
+        fp *= 2.3;
+    }
+    return v;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 src = image.Sample(textureSampler, uv);
+
+    // Step 1: Desaturate source.
+    float lum     = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float3 desatC = float3(lum, lum, lum);
+
+    // Step 2: Rust colour palette — two rust tones for shadows and highlights.
+    //   Shadow rust: dark reddish-brown.
+    //   Highlight rust: bright orange-tan.
+    float3 rustShadow    = float3(0.28, 0.13, 0.04);
+    float3 rustHighlight = float3(0.75, 0.42, 0.18);
+    float3 rustColor     = lerp(rustShadow, rustHighlight, lum);
+
+    // Step 3: Blend desaturated with rust tones.
+    float3 warm = lerp(desatC, rustColor, warmth);
+    float3 rusted = lerp(warm, rustColor, rust_strength * 0.6);
+    rusted = saturate(rusted);
+
+    // Step 4: High-frequency texture noise (rust pitting / surface roughness).
+    float2 texP    = uv * texture_scale;
+    float  texN    = rustTexture(texP);
+    // Modulate: bright noise lightens slightly, dark noise darkens.
+    float  texMod  = (texN - 0.5) * 0.4 * rust_strength;
+    rusted         = saturate(rusted + float3(texMod, texMod * 0.8, texMod * 0.5));
+
+    // Step 5: Heavy vignette.
+    float2 vig_uv   = uv * 2.0 - 1.0;
+    float  vig_dist = dot(vig_uv, vig_uv);
+    float  vig_mask = 1.0 - smoothstep(0.3, 1.4, vig_dist * vignette * 1.5);
+    rusted         *= vig_mask;
+
+    return float4(saturate(rusted), src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

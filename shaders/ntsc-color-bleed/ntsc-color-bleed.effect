@@ -1,0 +1,102 @@
+// J2 — ntsc-color-bleed
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: NTSC horizontal chroma smear — warm-spectrum color trailing and bleed
+// Chain order: apply before scanlines/CRT shaders, after source color correction
+
+uniform float4x4 ViewProj;
+uniform float bleed  = 0.016; // 0.0 – 0.05  horizontal chroma smear distance
+uniform float warmth = 0.2;   // 0.0 – 0.5   warm color bias (red/yellow push)
+
+uniform texture2d image;
+uniform float2 uv_pixel_interval;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// RGB to YIQ (NTSC)
+float3 RGBtoYIQ(float3 c)
+{
+    float y = 0.299  * c.r + 0.587  * c.g + 0.114  * c.b;
+    float i = 0.596  * c.r - 0.275  * c.g - 0.321  * c.b;
+    float q = 0.212  * c.r - 0.523  * c.g + 0.311  * c.b;
+    return float3(y, i, q);
+}
+
+// YIQ to RGB (NTSC)
+float3 YIQtoRGB(float3 yiq)
+{
+    float r = yiq.x + 0.956 * yiq.y + 0.619 * yiq.z;
+    float g = yiq.x - 0.272 * yiq.y - 0.647 * yiq.z;
+    float b = yiq.x - 1.106 * yiq.y + 1.703 * yiq.z;
+    return float3(r, g, b);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Sample original for luma
+    float4 orig = image.Sample(textureSampler, uv);
+    float3 yiqOrig = RGBtoYIQ(orig.rgb);
+
+    // Accumulate bleed taps — sample chroma from pixels to the left (trailing smear)
+    // 6 taps with exponential falloff
+    float3 bleedYiq = float3(0.0, 0.0, 0.0);
+    float  totalW   = 0.0;
+
+    [unroll]
+    for (int t = 1; t <= 6; t++)
+    {
+        float  offset = bleed * float(t);
+        float  w      = exp(-float(t) * 0.55); // exponential decay
+        float2 tapUv  = float2(uv.x - offset, uv.y);
+        float4 tapCol = image.Sample(textureSampler, tapUv);
+        float3 tapYiq = RGBtoYIQ(tapCol.rgb);
+        // Accumulate only chroma (I and Q)
+        bleedYiq.yz += tapYiq.yz * w;
+        totalW       += w;
+    }
+    bleedYiq.yz /= totalW;
+
+    // Use original luma, bleed chroma
+    float3 yiqFinal;
+    yiqFinal.x  = yiqOrig.x;
+    yiqFinal.yz = lerp(yiqOrig.yz, bleedYiq.yz, 0.7);
+
+    float3 rgb = YIQtoRGB(yiqFinal);
+
+    // Warm bias: push red channel and reduce blue slightly
+    rgb.r = saturate(rgb.r + warmth * 0.35);
+    rgb.g = saturate(rgb.g + warmth * 0.10);
+    rgb.b = saturate(rgb.b - warmth * 0.20);
+
+    return float4(saturate(rgb), orig.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

@@ -1,0 +1,59 @@
+// O1 — circular-webcam-crop
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Crops webcam feed to a smooth antialiased circle; outside = alpha 0
+// Chain order: Apply first in chain before any color grading
+
+uniform float4x4 ViewProj;
+uniform float radius   = 0.48; // 0.1 – 0.5
+uniform float softness = 0.008; // 0.001 – 0.05
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv     = v_in.uv;
+    float4 col    = image.Sample(textureSampler, uv);
+
+    // Distance from center in UV space (compensate for non-square pixels is
+    // left to the user via radius; pure UV dist keeps it simple and portable)
+    float2 delta  = uv - float2(center_x, center_y);
+    float  dist   = length(delta);
+
+    // Smooth step: 1 inside circle, 0 outside
+    float  alpha  = 1.0 - smoothstep(radius - softness, radius + softness, dist);
+
+    col.a *= alpha;
+    return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

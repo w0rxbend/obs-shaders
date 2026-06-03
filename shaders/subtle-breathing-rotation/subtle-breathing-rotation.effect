@@ -1,0 +1,62 @@
+// Subtle Breathing Rotation
+// Animated webcam/source rotation using UV coordinates only.
+// strong_preset=false: subtle; strong_preset=true: stronger motion preset.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+
+uniform float speed = 0.65;              // 0.0-5.0
+uniform float amount = 1.0;              // 0.0-2.0
+uniform float zoom_compensation = 0.035; // 0.0-0.20
+uniform float center_x = 0.5;            // 0.0-1.0
+uniform float center_y = 0.5;            // 0.0-1.0
+uniform bool strong_preset = false;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float2 rotate2d(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float t = elapsed_time * speed;
+    float preset = strong_preset ? 3.0 : 1.0;
+    float angle = sin(t) * 0.018 * amount * preset;
+    float2 center = float2(center_x, center_y);
+    float zoom = 1.0 + max(0.0, zoom_compensation) + abs(angle) * 1.2;
+
+    float2 p = (v_in.uv - center) / zoom;
+    float2 uv = center + rotate2d(p, angle);
+    return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

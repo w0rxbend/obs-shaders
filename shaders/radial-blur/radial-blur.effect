@@ -1,0 +1,64 @@
+// N3 — radial-blur
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Zoom blur radiating from center point (motion-zoom effect)
+// Chain order: After color grade; before compositing
+
+uniform float4x4 ViewProj;
+uniform float blur_amount = 0.04;  // 0.0–0.1 — step size per tap
+uniform float center_x    = 0.5;   // 0.0–1.0
+uniform float center_y    = 0.5;   // 0.0–1.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv     = v_in.uv;
+    float2 center = float2(center_x, center_y);
+    float2 dir    = uv - center;
+
+    // Fixed 9 taps distributed along the radial direction
+    static const int TAPS = 9;
+    float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+
+    for (int i = 0; i < TAPS; i++)
+    {
+        // t goes from -0.5 to +0.5 around current pixel
+        float t       = (float(i) / float(TAPS - 1)) - 0.5;
+        float2 sampleUV = uv + dir * t * blur_amount * 2.0;
+        sampleUV = clamp(sampleUV, 0.0, 1.0);
+        acc += image.Sample(textureSampler, sampleUV);
+    }
+
+    return acc / float(TAPS);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

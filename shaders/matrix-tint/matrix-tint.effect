@@ -1,0 +1,57 @@
+// E6 — matrix-tint
+// Desaturates the image and applies a phosphor-green tint with
+// horizontal scanlines and subtle animated noise.
+// green_strength    : strength of the green tint (0.0–1.0, default 0.9)
+// scanline_darkness : how dark every other scanline is (0.0–1.0, default 0.3)
+// noise_amount      : animated luma noise intensity (0.0–0.2, default 0.05)
+
+uniform float green_strength    = 0.9;
+uniform float scanline_darkness = 0.3;
+uniform float noise_amount      = 0.05;
+
+uniform float elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 orig = image.Sample(textureSampler, uv);
+
+    // Luminance
+    float lum = dot(orig.rgb, float3(0.2126, 0.7152, 0.0722));
+
+    // Green phosphor colour: full green channel, dim red/blue for warmth
+    float3 greenPhosphor = float3(0.05, 1.0, 0.15);
+    float3 gray = float3(lum, lum, lum);
+    float3 col  = lerp(gray, gray * greenPhosphor, green_strength);
+
+    // Scanlines: darken every other ~2-pixel band
+    // Use uv.y * 512 as proxy for screen lines; mod 2 < 1 = dark line
+    float scanline = frac(uv.y * 256.0);
+    float dark     = step(0.5, scanline) * scanline_darkness;
+    col *= (1.0 - dark);
+
+    // Animated noise
+    float tick = floor(elapsed_time * 30.0);
+    float noise = hash2(float2(floor(uv.x * 512.0), floor(uv.y * 256.0)) + tick) * 2.0 - 1.0;
+    col = saturate(col + float3(noise, noise, noise) * noise_amount);
+
+    return float4(col, orig.a);
+}

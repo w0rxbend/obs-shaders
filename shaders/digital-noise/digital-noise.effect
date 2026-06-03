@@ -1,0 +1,76 @@
+// E3 — digital-noise
+// Heavy digital static/noise overlay (binary salt-and-pepper style).
+// amount  : fraction of pixels replaced by noise (0.0–1.0, default 0.15)
+// size    : noise pixel size multiplier (0.5–4.0, default 1.0)
+// colored : false = white/black noise, true = random RGB noise
+
+uniform float amount  = 0.15;
+uniform float size    = 1.0;
+uniform bool  colored = false;
+
+uniform float elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Quantised UV so noise pixels are size * 1 screen pixel block
+// We pass resolution indirectly through uv_pixel_interval but here
+// we approximate using size as a UV-space tile factor across 512 steps.
+float2 quantUV(float2 uv, float s)
+{
+    // Tile into roughly 512 cells then scale by 1/s
+    float cells = 512.0 / s;
+    return floor(uv * cells) / cells;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Animated: tick every frame (60 fps feel)
+    float tick = floor(elapsed_time * 60.0);
+
+    float2 qUV = quantUV(uv, size);
+
+    // Per-pixel hash (animated)
+    float h = hash2(qUV + tick * float2(0.1234, 0.9876));
+
+    // Is this pixel a noise pixel?
+    float isNoise = step(1.0 - amount, h);
+
+    // Sample original colour
+    float4 orig = image.Sample(textureSampler, uv);
+
+    float4 noiseColor;
+    if (colored)
+    {
+        float r = hash2(qUV * 1.3 + tick * float2(0.2, 0.1));
+        float g = hash2(qUV * 1.7 + tick * float2(0.5, 0.3));
+        float b = hash2(qUV * 2.1 + tick * float2(0.8, 0.6));
+        noiseColor = float4(r, g, b, 1.0);
+    }
+    else
+    {
+        // Binary: second hash decides white (1) or black (0)
+        float bw = step(0.5, hash2(qUV * 2.0 + tick * float2(0.77, 0.33)));
+        noiseColor = float4(bw, bw, bw, 1.0);
+    }
+
+    float4 result = lerp(orig, noiseColor, isNoise);
+    result.a = orig.a;
+    return result;
+}

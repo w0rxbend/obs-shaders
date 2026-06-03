@@ -1,0 +1,94 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Impact ripple expanding from a configurable UV point with energy color flash at the wavefront
+// Chain order: Apply on top of source before bloom; stack after forcefield-distortion for layered shield effects
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float ripple_speed   = 2.0;  // 0.5–5.0
+uniform float impact_x       = 0.5;  // 0.0–1.0
+uniform float impact_y       = 0.5;  // 0.0–1.0
+uniform float ripple_strength = 0.02; // 0.0–0.04
+uniform float flash_color_r  = 0.3;
+uniform float flash_color_g  = 0.7;
+uniform float flash_color_b  = 1.0;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv      = v_in.uv;
+    float2 impact  = float2(impact_x, impact_y);
+    float2 delta   = uv - impact;
+    float  dist    = length(delta);
+
+    // --- Expanding ripple ring ---
+    // The ripple radius grows over time, looping with a period
+    float period     = 2.5 / ripple_speed;
+    float phase_time = fmod(elapsed_time, period);
+    float radius     = phase_time * ripple_speed * 0.35; // expands 0..~0.875
+
+    // Ripple wave: sharp ring around the expanding radius
+    float ring_width = 0.06;
+    float ring_dist  = abs(dist - radius);
+    float ring       = exp(-ring_dist * ring_dist / (ring_width * ring_width) * 18.0);
+
+    // Wave displacement: push pixels radially
+    float2 dir = (dist > 0.001) ? (delta / dist) : float2(0.0, 1.0);
+    // The wave is strongest at the ring front, fades outward
+    float wave_phase = (dist - radius) * 60.0;
+    float wave_disp  = sin(wave_phase) * ring * ripple_strength;
+    // Fade out as it expands
+    float fade       = 1.0 - saturate(radius / 0.85);
+    wave_disp       *= fade;
+
+    float2 warped_uv = clamp(uv + dir * wave_disp, 0.0, 1.0);
+    float4 src       = image.Sample(textureSampler, warped_uv);
+
+    // --- Energy color flash on the ring ---
+    float3 flash_col = float3(flash_color_r, flash_color_g, flash_color_b);
+    float  flash_amt = ring * fade * 0.7;
+    float3 col       = src.rgb + flash_col * flash_amt;
+
+    // --- Secondary inner glow (concentric echo rings) ---
+    for (float i = 1.0; i <= 2.0; i++)
+    {
+        float echo_radius = max(0.0, radius - i * 0.07);
+        float echo_dist   = abs(dist - echo_radius);
+        float echo_ring   = exp(-echo_dist * echo_dist / (ring_width * ring_width) * 30.0);
+        col += flash_col * echo_ring * fade * 0.2 / i;
+    }
+
+    col = saturate(col);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

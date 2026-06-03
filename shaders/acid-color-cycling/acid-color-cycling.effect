@@ -1,0 +1,102 @@
+// K6 — acid-color-cycling
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Continuous hue rotation with saturation boost and spatial wave distortion
+// Chain order: standalone or after base correction; before output
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float    elapsed_time;
+
+uniform float cycle_speed      = 0.8;  // 0.0–5.0  — full hue cycle per N seconds
+uniform float saturation_boost = 1.8;  // 0.5–3.0
+uniform float wave_distortion  = 0.006; // 0.0–0.02
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// RGB <-> HSV
+float3 rgb2hsv(float3 c)
+{
+    float4 K = float4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+    float4 p = (c.g < c.b) ? float4(c.bg, K.wz) : float4(c.gb, K.xy);
+    float4 q = (c.r < p.x) ? float4(p.xyw, c.r) : float4(c.r, p.yzx);
+    float d  = q.x - min(q.w, q.y);
+    float e  = 1.0e-10;
+    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+float3 hsv2rgb(float3 c)
+{
+    float4 K = float4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+    float3 k_xyz = float3(K.x, K.y, K.z);
+    float3 k_www = float3(K.w, K.w, K.w);
+    float3 p = abs(frac(float3(c.x, c.x, c.x) + k_xyz) * 6.0 - k_www);
+    float3 one = float3(K.x, K.x, K.x);
+    return c.z * lerp(one, saturate(p - one), c.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Spatial wave distortion: UV ripple following multiple sine waves
+    float t   = elapsed_time;
+    float waveX = sin(uv.y * 8.0  + t * 3.1) * wave_distortion
+                + sin(uv.y * 23.0 + t * 1.7) * wave_distortion * 0.3;
+    float waveY = sin(uv.x * 6.0  + t * 2.3) * wave_distortion
+                + sin(uv.x * 17.0 + t * 4.1) * wave_distortion * 0.25;
+    float2 distUV = uv + float2(waveX, waveY);
+
+    float4 src = image.Sample(textureSampler, distUV);
+
+    // Hue cycling — cycle_speed full rotations per second
+    float hueShift  = frac(t * cycle_speed);
+
+    // Also add per-pixel hue variation based on original luminance (psychedelic)
+    float luma      = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float pixelShift = luma * 0.25; // brighter pixels lead in hue
+
+    float3 hsv  = rgb2hsv(src.rgb);
+    hsv.x       = frac(hsv.x + hueShift + pixelShift);
+    hsv.y       = saturate(hsv.y * saturation_boost);
+    // Slight value boost to keep things vivid
+    hsv.z       = saturate(hsv.z * 1.1);
+    float3 col  = hsv2rgb(hsv);
+
+    // Additive hue-shifted overlay on bright regions for acid bloom
+    float3 hsvBloom  = hsv;
+    hsvBloom.x       = frac(hsvBloom.x + 0.333); // complementary hue
+    hsvBloom.y       = 1.0;
+    float3 bloomCol  = hsv2rgb(hsvBloom);
+    float bloomMask  = saturate((luma - 0.55) * 4.0);
+    col = saturate(col + bloomCol * bloomMask * 0.15);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

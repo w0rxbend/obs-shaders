@@ -1,0 +1,87 @@
+// F8 — noir-detective
+// Black & white noir: high contrast, deep shadows, moody vignette,
+// subtle warm tone, animated film grain.
+
+uniform float4x4 ViewProj;
+uniform float contrast = 2.0;  // 1.0 – 4.0  contrast power curve
+uniform float vignette = 0.6;  // 0.0 – 1.0  vignette strength
+uniform float warmth   = 0.1;  // 0.0 – 0.5  yellow-warm tint on highlights
+uniform float grain    = 0.08; // 0.0 – 0.3  film grain amount
+
+uniform float elapsed_time;
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Pseudo-random hash for grain.
+float hash(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 src = image.Sample(textureSampler, uv);
+
+    // Convert to luminance.
+    float lum = dot(src.rgb, float3(0.299, 0.587, 0.114));
+
+    // Contrast: S-curve via power function.
+    // Rescale to [-1,1], apply signed power, rescale back.
+    float c = lum * 2.0 - 1.0;
+    float sign_c = sign(c);
+    float abs_c  = abs(c);
+    float curved = sign_c * pow(abs_c, 1.0 / max(contrast, 0.01));
+    lum = saturate(curved * 0.5 + 0.5);
+
+    // Warm tone: shift highlights toward warm (yellow-cream) and shadows blue-black.
+    float3 warmColor = float3(1.0, 0.92, 0.75); // warm yellow-cream
+    float3 noirGray  = float3(lum, lum, lum);
+    float3 col       = lerp(noirGray, noirGray * warmColor, warmth * lum);
+
+    // Vignette: smooth darkening toward corners.
+    float2 vig_uv    = uv * 2.0 - 1.0;                      // [-1, 1]
+    float  vig_dist  = dot(vig_uv, vig_uv);                  // 0 centre → ~2 corners
+    float  vig_mask  = 1.0 - smoothstep(0.4, 1.6, vig_dist * vignette);
+    col *= vig_mask;
+
+    // Animated film grain — time-varying random noise.
+    float2 grainUV = uv / uv_pixel_interval;
+    float  grainT  = floor(elapsed_time * 24.0); // 24 fps grain change
+    float  n       = hash(grainUV + float2(grainT * 0.1234, grainT * 0.5678));
+    n = (n - 0.5) * 2.0; // [-1, +1]
+    col = saturate(col + float3(n, n, n) * grain);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

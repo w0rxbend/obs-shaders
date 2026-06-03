@@ -1,0 +1,58 @@
+// C1 — bw-old-film
+// Black and white with warm paper tone, vignette, and flickering brightness.
+
+uniform float warmth       = 0.3; // 0.0 – 1.0
+uniform float vignette     = 0.4; // 0.0 – 1.0
+uniform float flicker_speed = 1.5; // 0.0 – 5.0
+
+uniform texture2d image;
+uniform float elapsed_time;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Low-frequency flicker using multiple sin harmonics
+float Flicker(float t, float speed)
+{
+    float f = speed * t;
+    return 1.0 + 0.04 * sin(f * 1.0)
+               + 0.03 * sin(f * 2.3 + 0.7)
+               + 0.02 * sin(f * 5.1 + 1.3);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Luminance (BT.601 weights)
+    float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
+
+    // Warm paper tone: slightly push toward sepia-cream
+    // Base paper white ~ (1.0, 0.97, 0.88), shadow ~ (0.18, 0.14, 0.10)
+    float3 paper  = float3(1.00, 0.97, 0.88);
+    float3 shadow = float3(0.18, 0.14, 0.10);
+    float3 warm   = lerp(shadow, paper, luma);
+    float3 bwRgb  = float3(luma, luma, luma);
+    float3 toned  = lerp(bwRgb, warm, warmth);
+
+    // Projector flicker
+    float flick = Flicker(elapsed_time, flicker_speed);
+    toned = saturate(toned * flick);
+
+    // Radial vignette
+    float2 centered = uv - 0.5;
+    float  dist     = dot(centered, centered);           // squared radius
+    float  vig      = 1.0 - smoothstep(0.10, 0.75, dist * 3.5);
+    toned = toned * lerp(1.0, vig, vignette);
+
+    return float4(saturate(toned), col.a);
+}

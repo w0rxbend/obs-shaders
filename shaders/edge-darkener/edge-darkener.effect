@@ -1,0 +1,35 @@
+// A3 — edge-darkener
+// Darkens only the very edge pixels (border pinch), useful for camera framing.
+
+uniform float width    = 0.05; // 0.0 – 0.3
+uniform float strength = 0.8;  // 0.0 – 1.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Distance from each edge (0 at edge, 1 at center)
+    float2 edgeDist = min(uv, 1.0 - uv);
+    float  minDist  = min(edgeDist.x, edgeDist.y);
+
+    // Inside the edge band: minDist goes from 0 (edge) to width
+    float edgeFactor = 1.0 - smoothstep(0.0, max(width, 0.001), minDist);
+
+    float darken = 1.0 - edgeFactor * strength;
+    col.rgb *= darken;
+    return col;
+}

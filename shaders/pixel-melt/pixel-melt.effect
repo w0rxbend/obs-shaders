@@ -1,0 +1,87 @@
+// N6 — pixel-melt
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Pixels drip/melt downward driven by noise — horror/glitch aesthetic
+// Chain order: Apply before compositing; pairs well with film-grain or digital-noise
+
+uniform float4x4 ViewProj;
+uniform float melt_strength = 0.12;  // 0.0–0.3
+uniform float melt_scale    = 4.0;   // 1.0–10.0
+uniform float speed         = 0.8;   // 0.0–3.0
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Simple value noise via hash
+float hash1(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Smooth value noise — bilinear interpolation of 4 hashes
+float vnoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+
+    // Smoothstep
+    float2 u = f * f * (3.0 - 2.0 * f);
+
+    float a = hash1(i);
+    float b = hash1(i + float2(1.0, 0.0));
+    float c = hash1(i + float2(0.0, 1.0));
+    float d = hash1(i + float2(1.0, 1.0));
+
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float  t  = elapsed_time * speed;
+
+    // Noise coordinate: vary per column (x axis), animate by time
+    float2 noiseCoord = float2(uv.x * melt_scale, t * 0.5);
+
+    // Drip offset — noise value drives downward shift
+    float drip = vnoise(noiseCoord) * melt_strength;
+
+    // Additional fine ripple on the drip edges
+    float ripple = sin(uv.x * 6.2832 * melt_scale * 2.0 + t * 3.0) * melt_strength * 0.15;
+    drip += ripple;
+
+    // Shift UV downward (positive Y = down in OBS)
+    float2 sampleUV = clamp(uv + float2(0.0, drip), 0.0, 1.0);
+
+    return image.Sample(textureSampler, sampleUV);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

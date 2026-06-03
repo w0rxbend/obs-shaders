@@ -1,0 +1,68 @@
+// D1 — supernatural-grade
+// TV show supernatural cold grade: blue-green tinted shadows,
+// desaturated midtones, cool highlights.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float strength = 0.7;
+uniform float shadow_r = 0.3;
+uniform float shadow_g = 0.5;
+uniform float shadow_b = 0.4;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv   = v_in.uv;
+    float4 col  = image.Sample(textureSampler, uv);
+    float3 rgb  = col.rgb;
+
+    // Luminance
+    float luma = dot(rgb, float3(0.299, 0.587, 0.114));
+
+    // Desaturate midtones — blend toward luma-based grey proportional to midtone mask
+    float midMask = 1.0 - abs(luma - 0.5) * 2.0; // peaks at 0.5 luma
+    float3 desat  = lerp(rgb, float3(luma, luma, luma), midMask * 0.6);
+
+    // Shadow tint — applied where luma is low
+    float shadowMask = 1.0 - smoothstep(0.0, 0.45, luma);
+    float3 shadowTint = float3(shadow_r, shadow_g, shadow_b);
+    // Tint dark areas toward the shadow color
+    float3 tinted = lerp(desat, desat * shadowTint * 2.0, shadowMask * 0.7);
+
+    // Cool (blue-cyan) highlights — shift bright areas slightly blue
+    float highlightMask = smoothstep(0.6, 1.0, luma);
+    float3 coolHighlight = tinted + float3(-0.03, 0.01, 0.06) * highlightMask;
+
+    float3 graded = saturate(coolHighlight);
+    float3 result = lerp(rgb, graded, strength);
+
+    return float4(result, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

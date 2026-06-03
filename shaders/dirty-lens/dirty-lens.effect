@@ -1,0 +1,159 @@
+// J8 — dirty-lens
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Procedural smudges, dust, and water spots on the lens
+// Chain order: apply last or near-last; pairs well with bloom/overexposure
+
+uniform float4x4 ViewProj;
+uniform float smudge_scale    = 5.0;  // 1.0 – 15.0   scale of smudge features
+uniform float smudge_strength = 0.25; // 0.0 – 0.5    smudge opacity
+uniform float dust_amount     = 0.15; // 0.0 – 0.5    dust/spot density
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float Hash22x(float2 p)
+{
+    return frac(sin(dot(p, float2(269.5, 183.3))) * 43758.5453);
+}
+
+// 2D value noise
+float ValueNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+
+    float a = Hash21(i);
+    float b = Hash21(i + float2(1.0, 0.0));
+    float c = Hash21(i + float2(0.0, 1.0));
+    float d = Hash21(i + float2(1.0, 1.0));
+
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+// Fractional Brownian Motion — 4 octaves
+float FBM(float2 p)
+{
+    float v = 0.0;
+    float a = 0.5;
+    float2 shift = float2(100.0, 100.0);
+    for (int i = 0; i < 4; i++)
+    {
+        v += a * ValueNoise(p);
+        p  = p * 2.0 + shift;
+        a *= 0.5;
+    }
+    return v;
+}
+
+// Smudge/water spot: circular blobs at procedural positions
+float WaterSpot(float2 uv, float2 center, float radius)
+{
+    float d = length((uv - center) * float2(1.78, 1.0)); // aspect correction ~16:9
+    return 1.0 - smoothstep(radius * 0.5, radius, d);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 col = image.Sample(textureSampler, uv);
+
+    // --- Multi-scale smudge layer using FBM ---
+    float2 smudgeUv = uv * smudge_scale;
+    float  smudge   = FBM(smudgeUv);
+    // Smudge looks like a slight frosted/hazy overlay that darkens and blurs perception
+    // We simulate by blending toward a softened lighter version
+    float  smudgeAlpha = pow(smudge, 2.5) * smudge_strength;
+    // Smudge tint: slightly warm/yellowish (oil/grease)
+    float3 smudgeColor = float3(col.r * 1.1, col.g * 1.05, col.b * 0.9) * 1.3;
+    col.rgb = lerp(col.rgb, smudgeColor, saturate(smudgeAlpha));
+
+    // --- Dust spots ---
+    // Scatter several fixed dust particles using a grid of potential spots
+    // Each grid cell can contain at most one dust particle
+    float  dustDensity = dust_amount * 80.0; // scale to ~0-40 visible spots
+
+    float2 dustGrid = uv * 12.0; // 12x12 grid cells
+    float2 dustCell = floor(dustGrid);
+    float2 dustFrac = frac(dustGrid);
+
+    float dustMask = 0.0;
+    // Check a 3x3 neighborhood of cells for spots that might overlap
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            float2 neighborCell = dustCell + float2(float(dx), float(dy));
+            float  cellRand     = Hash21(neighborCell * 3.71);
+            // Spawn a dust spot only if cell random < density
+            if (cellRand < dust_amount)
+            {
+                float2 spotOffset = float2(Hash21(neighborCell + 0.5),
+                                           Hash22x(neighborCell + 0.5));
+                float2 spotCenter = neighborCell + spotOffset;
+                float2 spotUv     = dustGrid - spotCenter;
+                float  spotRad    = 0.08 + Hash21(neighborCell * 7.3) * 0.18;
+                float  spotDist   = length(spotUv * float2(1.0, 1.78));
+                float  spotAlpha  = 1.0 - smoothstep(spotRad * 0.3, spotRad, spotDist);
+                // Vary darkness: some dust is dark, some is bright (specular)
+                float  spotBright = Hash21(neighborCell * 13.1);
+                dustMask = max(dustMask, spotAlpha * (0.3 + spotBright * 0.7));
+            }
+        }
+    }
+
+    // Dust: blend toward dark (shadow) or slight highlight depending on spot
+    float3 dustBlend = lerp(col.rgb * 0.4, col.rgb * 1.6, Hash21(dustCell * 5.0));
+    col.rgb = lerp(col.rgb, dustBlend, dustMask * smudge_strength * 1.5);
+
+    // --- Water spot rings ---
+    // A couple of static large water drops near center area
+    float water1 = WaterSpot(uv, float2(0.35, 0.42), 0.055 * smudge_scale * 0.06);
+    float water2 = WaterSpot(uv, float2(0.62, 0.58), 0.04 * smudge_scale * 0.06);
+    float waterMask = saturate(water1 + water2);
+
+    // Water spots: slight brightness boost at edge ring, dark center
+    float2 w1off = (uv - float2(0.35, 0.42));
+    float  w1rim = abs(length(w1off * float2(1.78, 1.0)) - 0.025 * smudge_scale * 0.06);
+    float  waterRim = 1.0 - smoothstep(0.0, 0.012, w1rim);
+    col.rgb = lerp(col.rgb, col.rgb * 1.35, waterRim * smudge_strength * 0.8);
+    col.rgb = lerp(col.rgb, col.rgb * 0.85, waterMask * smudge_strength * 0.4);
+
+    return float4(saturate(col.rgb), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

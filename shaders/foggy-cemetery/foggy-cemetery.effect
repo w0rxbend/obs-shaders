@@ -1,0 +1,92 @@
+// D9 — foggy-cemetery
+// Grey/blue fog overlay heavier at edges and bottom, with noise drift.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float    elapsed_time;
+
+uniform float fog_density  = 0.5;
+uniform float fog_color_r  = 0.7;
+uniform float fog_color_g  = 0.75;
+uniform float fog_color_b  = 0.85;
+uniform float speed        = 0.3;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// 2D value noise via hash
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Smooth noise with bilinear interpolation of hash values
+float smoothNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f); // smoothstep curve
+
+    float a = hash21(i + float2(0.0, 0.0));
+    float b = hash21(i + float2(1.0, 0.0));
+    float c = hash21(i + float2(0.0, 1.0));
+    float d = hash21(i + float2(1.0, 1.0));
+
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Fog shape: heavier at edges and bottom
+    float2 centered  = uv - 0.5;
+    float  edgeFog   = dot(centered, centered) * 3.5;          // vignette-like
+    float  bottomFog = pow(saturate(uv.y * 1.3), 0.5) * 0.0;  // bottom = uv.y ~ 1 in OBS
+    // In OBS uv.y=0 is top, uv.y=1 is bottom. Heavy at bottom means uv.y large.
+    float  bottomMask = smoothstep(0.3, 1.0, uv.y);
+
+    // Animated noise for fog texture (slow drift)
+    float2 noiseUV = uv * float2(3.5, 2.5) + float2(elapsed_time * speed * 0.4, elapsed_time * speed * 0.15);
+    float  n1      = smoothNoise(noiseUV);
+    float2 noiseUV2 = uv * float2(6.0, 4.0) - float2(elapsed_time * speed * 0.25, elapsed_time * speed * 0.3);
+    float  n2       = smoothNoise(noiseUV2);
+    float  fogNoise = lerp(n1, n2, 0.4); // 0..1
+
+    // Combine fog density: edges + bottom + noise variation
+    float fogAmount = saturate(
+        (edgeFog * 0.4 + bottomMask * 0.5) * fog_density
+        + fogNoise * fog_density * 0.25
+    );
+
+    float3 fogColor = float3(fog_color_r, fog_color_g, fog_color_b);
+    float3 result   = lerp(col.rgb, fogColor, fogAmount);
+
+    return float4(saturate(result), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

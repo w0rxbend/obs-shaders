@@ -1,0 +1,78 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: no
+// Use case: Near-infrared photography look — vegetation/skin appear bright, sky dark, high-contrast B&W with red-tinted whites
+// Chain order: Apply as a standalone look; mutually exclusive with thermal-vision; follow with film-grain for authenticity
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float ir_strength = 0.9;  // 0.0–1.0
+uniform float red_tint    = 0.15; // 0.0–0.5  (red blush in bright areas)
+uniform float contrast    = 1.8;  // 1.0–3.0
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 src = image.Sample(textureSampler, uv);
+
+    // --- Infrared luminance approximation ---
+    // Near-IR makes greens/skin very bright (high NIR reflectance).
+    // We approximate by heavily weighting the red and green channels
+    // and suppressing blue (sky, water absorb NIR).
+    float luma_normal = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    // IR-weighted: red very high, green high, blue suppressed
+    float luma_ir = dot(src.rgb, float3(0.50, 0.45, 0.05));
+
+    // Blend between normal and IR luma
+    float luma = lerp(luma_normal, luma_ir, ir_strength);
+
+    // --- High contrast ---
+    // Remap: boost contrast, crush midtones
+    luma = saturate((luma - 0.5) * contrast + 0.5);
+
+    // --- Assemble B&W base ---
+    float3 col = float3(luma, luma, luma);
+
+    // --- Red tint in bright areas (wood effect / Aerochrome look) ---
+    // Bright regions shift toward pink/red, dark regions stay neutral
+    float bright_mask = saturate(luma - 0.4) / 0.6; // 0 below 0.4 luma, 1 at full white
+    col.r = col.r + bright_mask * red_tint;
+    col.g = col.g - bright_mask * red_tint * 0.3;
+    col.b = col.b - bright_mask * red_tint * 0.5;
+
+    col = saturate(col);
+
+    // --- Blend with original (ir_strength controls overall intensity) ---
+    col = lerp(src.rgb, col, ir_strength);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

@@ -1,0 +1,98 @@
+// K1 — dream-pop-glow
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Soft dreamy glow with pastel color shift and slight chromatic halo
+// Chain order: early in chain, before contrast/grade shaders
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2   uv_pixel_interval;
+
+uniform float glow_strength  = 0.8;  // 0.0–2.0
+uniform float pastel_amount  = 0.5;  // 0.0–1.0
+uniform float chroma_offset  = 0.005; // 0.0–0.01
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// 9-tap soft blur for glow layer
+float4 softBlur(float2 uv, float2 step_uv)
+{
+    float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+    acc += image.Sample(textureSampler, uv + float2(-step_uv.x, -step_uv.y)) * 0.0625;
+    acc += image.Sample(textureSampler, uv + float2( 0.0,       -step_uv.y)) * 0.1250;
+    acc += image.Sample(textureSampler, uv + float2( step_uv.x, -step_uv.y)) * 0.0625;
+    acc += image.Sample(textureSampler, uv + float2(-step_uv.x,  0.0))       * 0.1250;
+    acc += image.Sample(textureSampler, uv)                                  * 0.2500;
+    acc += image.Sample(textureSampler, uv + float2( step_uv.x,  0.0))       * 0.1250;
+    acc += image.Sample(textureSampler, uv + float2(-step_uv.x,  step_uv.y)) * 0.0625;
+    acc += image.Sample(textureSampler, uv + float2( 0.0,        step_uv.y)) * 0.1250;
+    acc += image.Sample(textureSampler, uv + float2( step_uv.x,  step_uv.y)) * 0.0625;
+    return acc;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Chromatic halo: sample R/B channels offset
+    float2 offsetR = float2( chroma_offset,  chroma_offset) / uv_pixel_interval;
+    float2 offsetB = float2(-chroma_offset, -chroma_offset) / uv_pixel_interval;
+    // Use pixel-space offsets clamped relative to image
+    float2 pxOff = float2(chroma_offset, chroma_offset);
+    float4 srcR  = image.Sample(textureSampler, uv + pxOff);
+    float4 srcG  = image.Sample(textureSampler, uv);
+    float4 srcB  = image.Sample(textureSampler, uv - pxOff);
+    float4 src   = float4(srcR.r, srcG.g, srcB.b, srcG.a);
+
+    // Glow: wide blur pass at 6px step
+    float2 blurStep = uv_pixel_interval * 6.0;
+    float4 glow     = softBlur(uv, blurStep * 1.7);
+
+    // Lift glow brightness for additive feel
+    float luma = dot(glow.rgb, float3(0.299, 0.587, 0.114));
+    float4 glowAdd = glow * saturate(luma * 1.5 + 0.1);
+
+    // Mix glow over source
+    float4 glowing = src + glowAdd * glow_strength * 0.6;
+    glowing = saturate(glowing);
+
+    // Pastel shift: lerp toward 0.5 (washed-out midtones give pastel feel)
+    float3 pastel = lerp(glowing.rgb, float3(0.5, 0.5, 0.5), pastel_amount * 0.4);
+
+    // Tint toward pink/lavender for dream-pop feel
+    float3 tint = float3(1.08, 0.95, 1.12);
+    float3 result = pastel * tint;
+
+    // Soft highlight bloom on brightest areas
+    float highlightMask = saturate((luma - 0.6) * 3.0);
+    float3 bloom = lerp(result, result + float3(0.15, 0.10, 0.18) * pastel_amount, highlightMask);
+
+    return float4(saturate(bloom), src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

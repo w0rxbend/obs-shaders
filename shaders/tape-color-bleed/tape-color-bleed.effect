@@ -1,0 +1,78 @@
+// C10 — tape-color-bleed
+// VHS chroma bleed — colour channels smear horizontally at different offsets.
+
+uniform float bleed_amount      = 0.012; // 0.0 – 0.05
+uniform int   smear             = 4;     // 1 – 8
+uniform float saturation_boost  = 0.3;   // 0.0 – 1.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float3 RGBtoYIQ(float3 rgb)
+{
+    float y = dot(rgb, float3( 0.299,  0.587,  0.114));
+    float i = dot(rgb, float3( 0.596, -0.274, -0.322));
+    float q = dot(rgb, float3( 0.211, -0.523,  0.312));
+    return float3(y, i, q);
+}
+
+float3 YIQtoRGB(float3 yiq)
+{
+    float r = yiq.x + 0.956 * yiq.y + 0.621 * yiq.z;
+    float g = yiq.x - 0.272 * yiq.y - 0.647 * yiq.z;
+    float b = yiq.x - 1.106 * yiq.y + 1.703 * yiq.z;
+    return float3(r, g, b);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+
+    // Luma: sample at current UV (no bleed on Y)
+    float4 center = image.Sample(textureSampler, uv);
+    float3 yiqC   = RGBtoYIQ(center.rgb);
+
+    // Chroma bleed: accumulate I and Q channels shifted left (toward lower X)
+    // Each successive tap contributes a decaying weight
+    float  totalWeight = 0.0;
+    float  bleedI      = 0.0;
+    float  bleedQ      = 0.0;
+
+    int clampedSmear = clamp(smear, 1, 8);
+
+    for (int k = 0; k < 8; k++)
+    {
+        if (k >= clampedSmear) break;
+        float  fk     = float(k);
+        // Each tap is further to the left; weight decays exponentially
+        float  weight = exp(-fk * 0.5);
+        float  offset = fk * bleed_amount;
+        float2 tapUv  = float2(saturate(uv.x - offset), uv.y);
+        float4 tap    = image.Sample(textureSampler, tapUv);
+        float3 yiqT   = RGBtoYIQ(tap.rgb);
+        bleedI       += yiqT.y * weight;
+        bleedQ       += yiqT.z * weight;
+        totalWeight  += weight;
+    }
+
+    bleedI /= totalWeight;
+    bleedQ /= totalWeight;
+
+    // Boost the bled chroma amplitude
+    float  chromaAmp = 1.0 + saturation_boost;
+    float3 yiqOut    = float3(yiqC.x, bleedI * chromaAmp, bleedQ * chromaAmp);
+
+    float3 rgb = YIQtoRGB(yiqOut);
+
+    return float4(saturate(rgb), center.a);
+}

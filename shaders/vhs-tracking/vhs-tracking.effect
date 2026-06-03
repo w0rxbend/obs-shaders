@@ -1,0 +1,71 @@
+// C8 — vhs-tracking
+// VHS tape tracking noise — animated horizontal bands that shift and tear.
+
+uniform float band_count     = 3.0;  // 1.0 – 10.0
+uniform float shift_strength = 0.015; // 0.0 – 0.05
+uniform float noise_strength = 0.1;  // 0.0 – 0.3
+uniform float speed          = 0.8;  // 0.2 – 3.0
+
+uniform texture2d image;
+uniform float elapsed_time;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float Hash11(float x)
+{
+    return frac(sin(x * 127.1) * 43758.5453);
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Scrolling Y phase for each band
+    float t       = elapsed_time * speed;
+    float bandY   = frac(uv.y * band_count - t);   // 0..1 within each band
+
+    // Band identity (which band are we in)
+    float bandId  = floor(uv.y * band_count - t);
+
+    // Per-band random properties
+    float bandRand  = Hash11(bandId * 7.3 + floor(t * 0.25));
+    float bandShift = (Hash11(bandId * 13.7 + floor(t * 0.5)) - 0.5) * 2.0;
+
+    // Tear intensity varies by position within band (stronger near edges)
+    float tearFactor  = smoothstep(0.0, 0.15, bandY) * (1.0 - smoothstep(0.85, 1.0, bandY));
+    float hShift      = bandShift * shift_strength * tearFactor * bandRand;
+
+    // Add pixel-level noise on top
+    float noiseVal = Hash21(float2(floor(uv.x * 320.0), floor(uv.y * 180.0))
+                           + float2(floor(t * 15.0), 0.0));
+    noiseVal = noiseVal * 2.0 - 1.0;
+
+    // Apply horizontal shift
+    float2 shiftedUv = float2(frac(uv.x + hShift), uv.y);
+    float4 col       = image.Sample(textureSampler, shiftedUv);
+
+    // Add luminance noise in torn regions
+    float noiseMask = tearFactor * bandRand * noise_strength;
+    col.rgb = saturate(col.rgb + float3(noiseVal, noiseVal, noiseVal) * noiseMask);
+
+    // Optional mild desaturation in the band tear zones (VHS loses chroma)
+    float luma   = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    float desatAmt = tearFactor * bandRand * noise_strength * 2.0;
+    col.rgb = lerp(col.rgb, float3(luma, luma, luma), saturate(desatAmt));
+
+    return float4(saturate(col.rgb), col.a);
+}

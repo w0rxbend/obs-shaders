@@ -1,0 +1,78 @@
+// F2 — posterize
+// Reduces colour depth to N steps per channel with optional ordered dithering.
+
+uniform float4x4 ViewProj;
+uniform int   levels = 4;    // 2 – 16  colour steps per channel
+uniform float dither = 0.0;  // 0.0 – 0.5  dither strength (0 = none)
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// 4x4 Bayer ordered-dither matrix, values in [0,1).
+float bayer4x4(float2 pixelPos)
+{
+    int px = (int)frac(pixelPos.x / 4.0) * 4;
+    int py = (int)frac(pixelPos.y / 4.0) * 4;
+
+    // Flatten: we compute the matrix value analytically.
+    float2 p = frac(pixelPos / 4.0) * 4.0;
+    int ix = (int)p.x;
+    int iy = (int)p.y;
+
+    // 16-entry Bayer matrix (row-major).
+    float mat[16];
+    mat[0]  =  0.0 / 16.0;  mat[1]  =  8.0 / 16.0;  mat[2]  =  2.0 / 16.0;  mat[3]  = 10.0 / 16.0;
+    mat[4]  = 12.0 / 16.0;  mat[5]  =  4.0 / 16.0;  mat[6]  = 14.0 / 16.0;  mat[7]  =  6.0 / 16.0;
+    mat[8]  =  3.0 / 16.0;  mat[9]  = 11.0 / 16.0;  mat[10] =  1.0 / 16.0;  mat[11] =  9.0 / 16.0;
+    mat[12] = 15.0 / 16.0;  mat[13] =  7.0 / 16.0;  mat[14] = 13.0 / 16.0;  mat[15] =  5.0 / 16.0;
+
+    return mat[iy * 4 + ix];
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 src = image.Sample(textureSampler, uv);
+
+    float2 pixelPos = uv / uv_pixel_interval;
+    float  thresh   = bayer4x4(pixelPos) - 0.5; // [-0.5, +0.5)
+
+    float lvls = max(2.0, (float)levels);
+
+    // Dither: offset each channel by the threshold scaled by dither amount,
+    // then quantise to the nearest step.
+    float3 ditherOffset = float3(thresh, thresh, thresh) * dither;
+    float3 biased = saturate(src.rgb + ditherOffset);
+    float3 quantised = floor(biased * (lvls - 1.0) + 0.5) / (lvls - 1.0);
+
+    return float4(quantised, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

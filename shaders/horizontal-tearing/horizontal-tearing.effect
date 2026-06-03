@@ -1,0 +1,54 @@
+// E4 — horizontal-tearing
+// Horizontal tearing bands: the image shifts left/right per band, randomly.
+// band_count  : number of horizontal bands (1.0–20.0, default 8.0)
+// tear_amount : max horizontal shift in UV units (0.0–0.1, default 0.02)
+// speed       : band update rate in ticks/sec (0.5–10.0, default 3.0)
+// probability : fraction of bands that tear at once (0.0–1.0, default 0.2)
+
+uniform float band_count   = 8.0;
+uniform float tear_amount  = 0.02;
+uniform float speed        = 3.0;
+uniform float probability  = 0.2;
+
+uniform float elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float tick = floor(elapsed_time * speed);
+
+    // Which band are we in?
+    float bandIndex = floor(uv.y * band_count);
+
+    // Hash band + tick to get stable-per-tick randomness
+    float h = hash2(float2(bandIndex, tick));
+
+    // Gate: only tear if hash exceeds (1 - probability)
+    float active = step(1.0 - probability, h);
+
+    // Direction and magnitude
+    float h2    = hash2(float2(bandIndex * 1.7, tick + 0.5));
+    float shift = (h2 * 2.0 - 1.0) * tear_amount * active;
+
+    float2 tornUV = float2(saturate(uv.x + shift), uv.y);
+
+    return image.Sample(textureSampler, tornUV);
+}

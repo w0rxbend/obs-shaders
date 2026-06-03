@@ -1,0 +1,45 @@
+// A8 — sharpen
+// Unsharp mask sharpening using uv_pixel_interval.
+
+uniform float strength = 0.8; // 0.0 – 3.0
+uniform float size     = 1.0; // 0.5 – 4.0  (blur kernel scale)
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv   = v_in.uv;
+    float2 px   = uv_pixel_interval * size;
+
+    float4 center = image.Sample(textureSampler, uv);
+
+    // 3x3 box blur (8 neighbors + center)
+    float4 blur = float4(0.0, 0.0, 0.0, 0.0);
+    blur += image.Sample(textureSampler, uv + float2(-px.x, -px.y));
+    blur += image.Sample(textureSampler, uv + float2(  0.0, -px.y));
+    blur += image.Sample(textureSampler, uv + float2( px.x, -px.y));
+    blur += image.Sample(textureSampler, uv + float2(-px.x,   0.0));
+    blur += center;
+    blur += image.Sample(textureSampler, uv + float2( px.x,   0.0));
+    blur += image.Sample(textureSampler, uv + float2(-px.x,  px.y));
+    blur += image.Sample(textureSampler, uv + float2(  0.0,  px.y));
+    blur += image.Sample(textureSampler, uv + float2( px.x,  px.y));
+    blur /= 9.0;
+
+    // Unsharp mask: result = center + strength * (center - blur)
+    float4 sharp = center + (center - blur) * strength;
+    sharp.a      = center.a;
+    return float4(saturate(sharp.rgb), sharp.a);
+}

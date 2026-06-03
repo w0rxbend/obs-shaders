@@ -1,0 +1,66 @@
+// G2 — animated-neon-border
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Animated glowing neon border that pulses in color around the edge of the source
+// Chain order: Apply after webcam-rounded-frame, before color grading
+
+uniform float border_width   = 0.03; // 0.01 – 0.1
+uniform float pulse_speed    = 1.5;  // 0.0 – 5.0
+uniform float hue_speed      = 0.4;  // 0.0 – 2.0
+uniform float glow_intensity = 1.5;  // 0.0 – 3.0
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Approximate hue rotation: returns RGB for a hue angle in [0, 2*PI].
+float3 hueToRGB(float h)
+{
+    float r = abs(h * 3.0 / 3.14159 - 3.0) - 1.0;
+    float g = 2.0 - abs(h * 3.0 / 3.14159 - 2.0);
+    float b = 2.0 - abs(h * 3.0 / 3.14159 - 4.0);
+    return saturate(float3(r, g, b));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Distance from the nearest edge (0 at edges, 0.5 at center).
+    float2 edge_dist = min(uv, 1.0 - uv);
+    float  d         = min(edge_dist.x, edge_dist.y);
+
+    // Normalized position in the border band [0,1]; 0 = outer edge, 1 = inner edge.
+    float border_t = saturate(d / max(border_width, 0.001));
+
+    // Pulse: oscillating brightness in the border band.
+    float pulse = 0.5 + 0.5 * sin(elapsed_time * pulse_speed * 6.28318);
+
+    // Hue cycle over time.
+    float hue = frac(elapsed_time * hue_speed) * 6.28318;
+    float3 neon_col = hueToRGB(hue);
+
+    // Glow falloff: strongest at edge, fades inward.
+    float glow = (1.0 - border_t) * glow_intensity * (0.6 + 0.4 * pulse);
+
+    // Soft anti-aliased mask for the border region.
+    float border_mask = 1.0 - smoothstep(0.0, 0.015 / max(border_width, 0.001), border_t);
+
+    // Additive glow blend over source, confined to border band.
+    float3 rgb = col.rgb + neon_col * glow * border_mask;
+    rgb = saturate(rgb);
+
+    return float4(rgb, col.a);
+}

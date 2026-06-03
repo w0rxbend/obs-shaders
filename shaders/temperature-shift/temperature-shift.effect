@@ -1,0 +1,45 @@
+// A6 — temperature-shift
+// Warm/cool color temperature shift with green/magenta tint control.
+
+uniform float temperature = 0.2;  // -1.0 (cool) to 1.0 (warm)
+uniform float tint        = 0.0;  // -1.0 (green) to 1.0 (magenta)
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Temperature: warm adds red/yellow, removes blue; cool is opposite.
+    // Approximate Planckian locus shift as RGB channel offsets.
+    float t = clamp(temperature, -1.0, 1.0);
+    float g = clamp(tint,        -1.0, 1.0);
+
+    // Channel multipliers: warm raises R, lowers B; cool does opposite.
+    float3 mult;
+    mult.r = 1.0 + t * 0.15;
+    mult.g = 1.0 - abs(t) * 0.03 + g * 0.08;
+    mult.b = 1.0 - t * 0.20;
+
+    float3 result = col.rgb * mult;
+
+    // Preserve luminance to avoid overall brightness shift
+    float lumaSrc = dot(col.rgb, float3(0.2126, 0.7152, 0.0722));
+    float lumaDst = dot(result,  float3(0.2126, 0.7152, 0.0722));
+    float scale   = (lumaDst > 0.0001) ? (lumaSrc / lumaDst) : 1.0;
+    result       *= scale;
+
+    return float4(saturate(result), col.a);
+}

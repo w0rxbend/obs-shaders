@@ -1,0 +1,170 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: no
+// Use case: Orange/amber HUD tint with scanlines, vignette, and animated HUD status lines scrolling at screen edges
+// Chain order: Apply as a final display overlay after color grading; stack after starship-monitor for dual-color monitor effect
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float tint_r    = 1.0;  // default orange
+uniform float tint_g    = 0.5;
+uniform float tint_b    = 0.0;
+uniform float scanlines = 0.25; // 0.0–1.0
+uniform float vignette  = 0.35; // 0.0–1.0
+uniform float hud_speed = 1.0;  // 0.0–3.0
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash11(float p)
+{
+    return frac(sin(p * 127.1) * 43758.5453);
+}
+
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Returns 1 if a HUD status line passes through this position
+float hudLine(float2 uv, float t)
+{
+    float result = 0.0;
+    float3 tint  = float3(tint_r, tint_g, tint_b);
+
+    // --- Left edge: vertical scrolling lines ---
+    // Lines scroll upward along the left strip (0..0.06 of width)
+    if (uv.x < 0.06)
+    {
+        // Several lines at different speeds
+        for (float i = 0.0; i < 4.0; i++)
+        {
+            float speed  = hud_speed * (0.4 + i * 0.3);
+            float offset = hash11(i * 7.13 + 0.5);
+            float line_y = fmod(t * speed + offset, 1.0);
+            float line_w = 0.003 + hash11(i * 3.71) * 0.01;
+            float dist   = abs(uv.y - line_y);
+            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.8;
+            // Segment gaps
+            float gap = hash21(float2(floor(uv.y * 30.0), i));
+            if (gap < 0.25) result = 0.0;
+        }
+    }
+
+    // --- Right edge: vertical scrolling lines (faster, different phase) ---
+    if (uv.x > 0.94)
+    {
+        for (float i = 0.0; i < 4.0; i++)
+        {
+            float speed  = hud_speed * (0.5 + i * 0.25);
+            float offset = hash11(i * 5.33 + 2.7);
+            float line_y = fmod(t * speed + offset + 0.5, 1.0);
+            float line_w = 0.004 + hash11(i * 2.91 + 1.0) * 0.008;
+            float dist   = abs(uv.y - line_y);
+            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.7;
+            float gap = hash21(float2(floor(uv.y * 25.0) + 50.0, i));
+            if (gap < 0.3) result = 0.0;
+        }
+    }
+
+    // --- Top edge: horizontal scrolling lines ---
+    if (uv.y < 0.04)
+    {
+        for (float i = 0.0; i < 3.0; i++)
+        {
+            float speed  = hud_speed * (0.6 + i * 0.4);
+            float offset = hash11(i * 9.17 + 1.3);
+            float line_x = fmod(t * speed + offset, 1.0);
+            float line_w = 0.005 + hash11(i * 4.55 + 0.8) * 0.015;
+            float dist   = abs(uv.x - line_x);
+            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.75;
+            float gap = hash21(float2(i, floor(uv.x * 20.0)));
+            if (gap < 0.2) result = 0.0;
+        }
+    }
+
+    // --- Bottom edge: horizontal scrolling lines (opposite direction) ---
+    if (uv.y > 0.96)
+    {
+        for (float i = 0.0; i < 3.0; i++)
+        {
+            float speed  = hud_speed * (0.5 + i * 0.35);
+            float offset = hash11(i * 6.29 + 3.9);
+            float line_x = fmod(1.0 - t * speed + offset, 1.0); // reverse
+            float line_w = 0.006 + hash11(i * 3.14 + 2.0) * 0.012;
+            float dist   = abs(uv.x - line_x);
+            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.7;
+            float gap = hash21(float2(i + 10.0, floor(uv.x * 18.0)));
+            if (gap < 0.25) result = 0.0;
+        }
+    }
+
+    return saturate(result);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 src = image.Sample(textureSampler, uv);
+
+    float3 col = src.rgb;
+
+    // --- HUD amber/orange tint ---
+    float luma = dot(col, float3(0.299, 0.587, 0.114));
+    float3 tint_col = float3(tint_r, tint_g, tint_b);
+    // Map color through tint: preserve luminance, shift hue
+    float3 tinted = float3(
+        col.r * tint_r,
+        col.g * tint_g + col.b * tint_g * 0.3,
+        col.b * tint_b + luma * tint_b * 0.2
+    );
+    // Normalize to preserve approximate brightness
+    float tinted_luma = dot(tinted, float3(0.299, 0.587, 0.114));
+    if (tinted_luma > 0.001) tinted *= luma / tinted_luma;
+    col = lerp(col, tinted, 0.85);
+    col = saturate(col);
+
+    // --- Scanlines ---
+    float scan = sin(uv.y * 850.0) * 0.5 + 0.5;
+    col *= lerp(1.0 - scanlines, 1.0, pow(scan, 1.6));
+
+    // --- Vignette ---
+    float2 vig_uv = uv - 0.5;
+    float  vig    = 1.0 - dot(vig_uv, vig_uv) * vignette * 3.5;
+    col *= saturate(vig);
+
+    // --- HUD status lines at edges ---
+    float hud = hudLine(uv, elapsed_time);
+    float3 hud_col = tint_col * 1.8;
+    col = lerp(col, col + hud_col * hud, hud * 0.9);
+    col = saturate(col);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

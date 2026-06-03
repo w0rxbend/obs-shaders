@@ -1,0 +1,72 @@
+// E5 — cyberpunk-neon
+// Boosts saturation, pushes colours toward cyan/magenta neon palette,
+// and adds an edge-detected bloom glow.
+// saturation   : colour saturation boost (1.0–4.0, default 2.2)
+// neon_shift   : strength of cyan/magenta hue shift (0.0–1.0, default 0.4)
+// bloom_strength: additive edge bloom intensity (0.0–1.0, default 0.3)
+
+uniform float saturation    = 2.2;
+uniform float neon_shift    = 0.4;
+uniform float bloom_strength = 0.3;
+
+uniform float2 uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float3 saturateColor(float3 c, float sat)
+{
+    float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+    return lerp(float3(lum, lum, lum), c, sat);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 orig = image.Sample(textureSampler, uv);
+    float3 col  = orig.rgb;
+
+    // --- Saturation boost ---
+    col = saturateColor(col, saturation);
+    col = saturate(col);
+
+    // --- Neon hue shift: push R channel toward magenta, B toward cyan ---
+    // Magenta = high R, low G.  Cyan = high G+B, low R.
+    float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
+    float3 cyan    = float3(0.0, 1.0, 1.0);
+    float3 magenta = float3(1.0, 0.0, 1.0);
+    // Weight toward cyan where blue dominates, magenta where red dominates
+    float redDom  = saturate(col.r - col.b);
+    float blueDom = saturate(col.b - col.r);
+    float3 neonTarget = lerp(cyan * lum, magenta * lum, redDom);
+    col = lerp(col, neonTarget, neon_shift * saturate(lum * 2.0));
+    col = saturate(col);
+
+    // --- Edge bloom via 4-tap Sobel approximation ---
+    float2 px = uv_pixel_interval;
+    float3 n  = image.Sample(textureSampler, uv + float2( 0.0, -px.y)).rgb;
+    float3 s  = image.Sample(textureSampler, uv + float2( 0.0,  px.y)).rgb;
+    float3 e  = image.Sample(textureSampler, uv + float2( px.x, 0.0)).rgb;
+    float3 w  = image.Sample(textureSampler, uv + float2(-px.x, 0.0)).rgb;
+
+    float3 edgeH = abs(e - w);
+    float3 edgeV = abs(n - s);
+    float3 edge  = sqrt(edgeH * edgeH + edgeV * edgeV);
+    float  edgeMag = dot(edge, float3(0.333, 0.333, 0.334));
+
+    // Bloom tinted cyan-magenta on the edge
+    float3 bloomColor = lerp(cyan, magenta, frac(edgeMag * 3.0)) * edgeMag;
+    col = saturate(col + bloomColor * bloom_strength);
+
+    return float4(col, orig.a);
+}

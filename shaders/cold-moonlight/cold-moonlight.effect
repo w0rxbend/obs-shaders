@@ -1,0 +1,77 @@
+// L5 — cold-moonlight
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Cool silver-blue night mood — desaturate, blue push, high contrast, deep shadow
+// Chain order: early in chain; add grain/noise after for atmosphere
+
+uniform float4x4 ViewProj;
+uniform float blue_tint     = 0.5;  // 0.0 – 1.0
+uniform float silver_amount = 0.4;  // 0.0 – 1.0
+uniform float contrast      = 1.6;  // 1.0 – 3.0
+uniform float vignette      = 0.45; // 0.0 – 1.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float luma(float3 c)
+{
+    return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float4 col = image.Sample(textureSampler, v_in.uv);
+    float3 c   = col.rgb;
+
+    // Partial desaturation toward silver (slightly blue-shifted grey)
+    float lum = luma(c);
+    float3 silverGrey = float3(lum * 0.88, lum * 0.92, lum * 1.08);
+    c = lerp(c, silverGrey, silver_amount);
+
+    // Blue tint push
+    c.b += blue_tint * 0.25;
+    c.g += blue_tint * 0.05;
+    c.r -= blue_tint * 0.12;
+
+    // High contrast via pivot scaling
+    float pivot = 0.5;
+    c = (c - pivot) * contrast + pivot;
+
+    // Vignette — darkens edges
+    float2 centered = v_in.uv - float2(0.5, 0.5);
+    float vd = dot(centered, centered) * 2.5;
+    float vig = 1.0 - clamp(vd * vignette * 1.1, 0.0, 0.92);
+    c *= vig;
+
+    c = clamp(c, 0.0, 1.0);
+    return float4(c, col.a);
+}
+
+technique Draw
+{
+    pass p0
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

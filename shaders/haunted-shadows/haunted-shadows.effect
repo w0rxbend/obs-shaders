@@ -1,0 +1,63 @@
+// D2 — haunted-shadows
+// Desaturated with green-tinted shadows and greenish midtones,
+// high contrast. Classic haunted / abandoned look.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float strength   = 0.8;
+uniform float green_shift = 0.4;
+uniform float contrast   = 1.6;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+    float3 rgb = col.rgb;
+
+    float luma = dot(rgb, float3(0.299, 0.587, 0.114));
+
+    // Full desaturation pass
+    float3 grey = float3(luma, luma, luma);
+
+    // Apply contrast around 0.5 midpoint
+    float3 contrasted = saturate((grey - 0.5) * contrast + 0.5);
+
+    // Green tint in shadows and midtones
+    float shadowMidMask = 1.0 - smoothstep(0.0, 0.7, contrasted.r);
+    float3 greenTint    = contrasted;
+    greenTint.g = saturate(greenTint.g + shadowMidMask * green_shift * 0.25);
+    greenTint.r = saturate(greenTint.r - shadowMidMask * green_shift * 0.10);
+    greenTint.b = saturate(greenTint.b - shadowMidMask * green_shift * 0.08);
+
+    float3 result = lerp(rgb, greenTint, strength);
+    return float4(saturate(result), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

@@ -1,0 +1,76 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Glitch-style wipe — jagged, noisy edge sweeps across screen
+// Chain order: Apply last; layer over rgb-split-glitch for full glitch stack
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float progress    = 0.5;  // 0.0 = fully visible, 1.0 = fully wiped
+uniform float noise_scale = 6.0;  // 1.0–20.0 frequency of edge jag
+uniform float edge_noise  = 0.1;  // 0.0–0.2 amplitude of edge jag
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Fast hash-noise in 1D (row-based)
+float hash1(float n)
+{
+    return frac(sin(n * 127.1) * 43758.5453);
+}
+
+// Stepped noise per horizontal band
+float rowNoise(float y, float scale)
+{
+    float band  = floor(y * scale);
+    float h0    = hash1(band);
+    float h1    = hash1(band + 1.0);
+    float t     = frac(y * scale);
+    // Smoothstep blend between bands
+    t = t * t * (3.0 - 2.0 * t);
+    return lerp(h0, h1, t);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv    = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
+
+    // Noise displacement along x at this row
+    float noise  = rowNoise(uv.y, noise_scale);
+    // Offset the wipe edge by noise
+    float edge   = progress + (noise - 0.5) * edge_noise * 2.0;
+
+    // Soft step with a tiny feather
+    float softness = 0.01;
+    float alpha    = 1.0 - smoothstep(edge - softness, edge + softness, uv.x);
+
+    color.a       *= alpha;
+    return color;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

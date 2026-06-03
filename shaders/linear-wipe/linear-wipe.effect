@@ -1,0 +1,60 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Linear directional wipe — sweeps source out in a chosen direction
+// Chain order: Apply last; color effects before this
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float progress = 0.5;    // 0.0 = fully visible, 1.0 = fully wiped away
+uniform float angle    = 0.0;    // 0.0–6.2832 radians; 0 = left-to-right wipe
+uniform float softness = 0.02;   // 0.0–0.1 edge feather width
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv    = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
+
+    // Project uv onto wipe direction vector
+    float2 dir   = float2(cos(angle), sin(angle));
+    // Centered uv: range -0.5..0.5
+    float2 cuv   = uv - float2(0.5, 0.5);
+    float  proj  = dot(cuv, dir) + 0.5; // back to 0..1 range
+
+    // progress=0 → edge at -softness (everything visible)
+    // progress=1 → edge at 1+softness (everything gone)
+    float  edge  = progress;
+    float  alpha = 1.0 - smoothstep(edge - softness, edge + softness, proj);
+
+    color.a     *= alpha;
+    return color;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

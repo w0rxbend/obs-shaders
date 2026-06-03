@@ -1,0 +1,119 @@
+// J7 — cctv-surveillance
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: CCTV/security camera look — desaturated, slight fisheye, scanlines, timestamp bar, noise
+// Chain order: apply last in chain as a complete look transform
+
+uniform float4x4 ViewProj;
+uniform float fisheye      = 0.1;  // 0.0 – 0.3    barrel/fisheye warp amount
+uniform float scanlines    = 0.35; // 0.0 – 1.0    scanline darkness
+uniform float noise_amount = 0.07; // 0.0 – 0.2    grain noise strength
+uniform float desat        = 0.7;  // 0.0 – 1.0    desaturation amount
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Barrel / fisheye distortion
+float2 FisheyeWarp(float2 uv, float amount)
+{
+    float2 cc   = uv - 0.5;
+    float  dist = dot(cc, cc);
+    uv = uv + cc * dist * amount * 3.5;
+    return uv;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Apply fisheye warp
+    float2 warpedUv = FisheyeWarp(uv, fisheye);
+
+    // Outside warped region: black
+    if (warpedUv.x < 0.0 || warpedUv.x > 1.0 || warpedUv.y < 0.0 || warpedUv.y > 1.0)
+        return float4(0.0, 0.0, 0.0, 1.0);
+
+    float4 col = image.Sample(textureSampler, warpedUv);
+
+    // --- Desaturation ---
+    float luma   = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    col.rgb      = lerp(col.rgb, float3(luma, luma, luma), desat);
+
+    // --- Very slight green tint (security camera phosphor) ---
+    col.rgb += float3(-0.02, 0.04, -0.02) * desat;
+
+    // --- Scanlines ---
+    float lineF    = uv.y / uv_pixel_interval.y;
+    float scanPos  = frac(lineF * 0.5);
+    float scanMask = smoothstep(0.0, 0.3, scanPos) * (1.0 - smoothstep(0.5, 0.8, scanPos));
+    float scanDark = lerp(1.0, scanMask, scanlines);
+    col.rgb *= scanDark;
+
+    // --- Grain noise ---
+    float2 noisePx = float2(floor(uv.x / uv_pixel_interval.x),
+                            floor(uv.y / uv_pixel_interval.y));
+    float  noise   = Hash21(noisePx + float2(floor(elapsed_time * 30.0), 0.0));
+    col.rgb        = saturate(col.rgb + (noise - 0.5) * noise_amount * 2.0);
+
+    // --- Vignette ---
+    float2 vig    = uv - 0.5;
+    float  vDist  = dot(vig, vig);
+    float  vign   = 1.0 - smoothstep(0.15, 0.55, vDist * 3.0);
+    col.rgb       *= lerp(1.0, vign, 0.5);
+
+    // --- Timestamp bar at bottom ---
+    float barH   = 0.055;
+    float inBar  = step(1.0 - barH, uv.y);
+    col.rgb      = lerp(col.rgb, col.rgb * 0.25 + float3(0.0, 0.08, 0.04), inBar * 0.9);
+
+    if (inBar > 0.5)
+    {
+        float barUvY = (uv.y - (1.0 - barH)) / barH;
+        float barUvX = uv.x;
+        // Faux timestamp pixel blocks — green phosphor
+        float charCol  = floor(barUvX * 20.0);
+        float charRow  = floor(barUvY * 6.0);
+        float charRand = Hash21(float2(charCol * 1.3, charRow * 2.7));
+        float pixOn    = step(0.4, charRand) * step(0.1, barUvY) * step(barUvY, 0.9)
+                        * step(barUvX, 0.65);
+        col.rgb = lerp(col.rgb, float3(0.2, 0.95, 0.35), pixOn * 0.85);
+    }
+
+    return float4(saturate(col.rgb), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

@@ -1,0 +1,83 @@
+// F3 — pencil-sketch
+// Sobel edge detection rendered as dark pencil lines on a bright paper background.
+
+uniform float4x4 ViewProj;
+uniform float line_strength     = 2.0;  // 0.0 – 5.0   edge amplification
+uniform float paper_brightness  = 0.95; // 0.0 – 1.0   base paper whiteness
+uniform float line_darkness     = 0.85; // 0.0 – 1.0   how dark the lines are (1 = black)
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Return luminance for a UV coordinate.
+float lum(float2 uv)
+{
+    float4 c = image.Sample(textureSampler, uv);
+    return dot(c.rgb, float3(0.299, 0.587, 0.114));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float2 px = uv_pixel_interval;
+
+    // 3×3 Sobel neighbourhood luminances.
+    float tl = lum(uv + float2(-px.x, -px.y));
+    float tc = lum(uv + float2(  0.0, -px.y));
+    float tr = lum(uv + float2( px.x, -px.y));
+    float ml = lum(uv + float2(-px.x,   0.0));
+    float mr = lum(uv + float2( px.x,   0.0));
+    float bl = lum(uv + float2(-px.x,  px.y));
+    float bc = lum(uv + float2(  0.0,  px.y));
+    float br = lum(uv + float2( px.x,  px.y));
+
+    // Sobel kernels.
+    float gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+    float gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+    float edge = sqrt(gx * gx + gy * gy);
+
+    // Amplify and saturate.
+    edge = saturate(edge * line_strength);
+
+    // Paper colour (slightly off-white warm tint).
+    float3 paper = float3(paper_brightness, paper_brightness * 0.98, paper_brightness * 0.95);
+
+    // Pencil line colour.
+    float lineLightness = 1.0 - line_darkness;
+    float3 ink = float3(lineLightness, lineLightness, lineLightness);
+
+    float3 col = lerp(paper, ink, edge);
+
+    // Preserve source alpha.
+    float4 src = image.Sample(textureSampler, uv);
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

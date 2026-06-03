@@ -1,0 +1,109 @@
+// K7 — vaporwave-pastel
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Pink/purple/cyan pastel grade, scanlines, chromatic aberration, slight bloom
+// Chain order: apply after base correction; pairs well with crt-scanlines or blur
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2   uv_pixel_interval;
+
+uniform float pink_shift  = 0.4;  // 0.0–1.0
+uniform float cyan_shift  = 0.3;  // 0.0–1.0
+uniform float scanlines   = 0.2;  // 0.0–1.0
+uniform float chroma      = 0.006; // 0.0–0.015
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// 9-tap blur for bloom pass
+float4 softBlur9(float2 uv, float2 step_uv)
+{
+    float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+    acc += image.Sample(textureSampler, uv + float2(-step_uv.x, -step_uv.y)) * 0.0625;
+    acc += image.Sample(textureSampler, uv + float2( 0.0,       -step_uv.y)) * 0.1250;
+    acc += image.Sample(textureSampler, uv + float2( step_uv.x, -step_uv.y)) * 0.0625;
+    acc += image.Sample(textureSampler, uv + float2(-step_uv.x,  0.0))       * 0.1250;
+    acc += image.Sample(textureSampler, uv)                                  * 0.2500;
+    acc += image.Sample(textureSampler, uv + float2( step_uv.x,  0.0))       * 0.1250;
+    acc += image.Sample(textureSampler, uv + float2(-step_uv.x,  step_uv.y)) * 0.0625;
+    acc += image.Sample(textureSampler, uv + float2( 0.0,        step_uv.y)) * 0.1250;
+    acc += image.Sample(textureSampler, uv + float2( step_uv.x,  step_uv.y)) * 0.0625;
+    return acc;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Chromatic aberration: split R/G/B channels
+    float4 colR = image.Sample(textureSampler, uv + float2( chroma, 0.0));
+    float4 colG = image.Sample(textureSampler, uv);
+    float4 colB = image.Sample(textureSampler, uv + float2(-chroma, 0.0));
+    float3 col  = float3(colR.r, colG.g, colB.b);
+
+    // Pastel lift: push midtones toward white (reduce contrast, lift blacks)
+    col = col * 0.85 + 0.08;
+
+    // Vaporwave color grade:
+    // Shadows -> purple/magenta, highlights -> cyan
+    float luma = dot(col, float3(0.299, 0.587, 0.114));
+    // Pink/purple in shadows
+    float3 shadowTint = float3(0.9, 0.5, 0.95);  // pink-purple
+    float3 highTint   = float3(0.5, 0.95, 0.95);  // cyan
+    float shadowMask  = saturate(1.0 - luma * 2.5);
+    float highMask    = saturate((luma - 0.4) * 2.5);
+    col += shadowTint * shadowMask * pink_shift * 0.25;
+    col += highTint   * highMask   * cyan_shift  * 0.25;
+
+    // Saturation boost
+    float lumaNew = dot(col, float3(0.299, 0.587, 0.114));
+    col = lerp(float3(lumaNew, lumaNew, lumaNew), col, 1.5);
+    col = saturate(col);
+
+    // Bloom: blur bright areas and tint pink
+    float4 bloom       = softBlur9(uv, uv_pixel_interval * 8.0);
+    float bloomLuma    = dot(bloom.rgb, float3(0.299, 0.587, 0.114));
+    float bloomMask    = saturate((bloomLuma - 0.45) * 3.0);
+    float3 bloomPink   = bloom.rgb * float3(1.2, 0.7, 1.1);
+    col = saturate(col + bloomPink * bloomMask * 0.3);
+
+    // Scanlines: thin horizontal lines
+    float scanFreq = 1.0 / uv_pixel_interval.y; // line count = pixel rows
+    float scanLine  = sin(uv.y * scanFreq * 3.14159) * 0.5 + 0.5;
+    scanLine        = pow(scanLine, 3.0);
+    col *= lerp(1.0, scanLine, scanlines * 0.6);
+
+    // Soft vignette
+    float2 vig_uv = uv * 2.0 - 1.0;
+    float vig = saturate(1.0 - dot(vig_uv, vig_uv) * 0.4);
+    col *= vig;
+
+    return float4(saturate(col), colG.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

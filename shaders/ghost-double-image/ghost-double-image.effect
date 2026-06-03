@@ -1,0 +1,58 @@
+// D5 — ghost-double-image
+// Additive ghost echo — faint copy of image offset in UV space.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float offset_x      =  0.03;
+uniform float offset_y      =  0.02;
+uniform float ghost_opacity  =  0.3;
+uniform float ghost_tint_r   =  0.8;
+uniform float ghost_tint_g   =  0.9;
+uniform float ghost_tint_b   =  1.0;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv     = v_in.uv;
+    float4 base   = image.Sample(textureSampler, uv);
+
+    // Ghost sample at offset UV
+    float2 ghostUV = uv + float2(offset_x, offset_y);
+    float4 ghost   = image.Sample(textureSampler, ghostUV);
+
+    // Apply tint to ghost
+    float3 tint     = float3(ghost_tint_r, ghost_tint_g, ghost_tint_b);
+    float3 tintedG  = ghost.rgb * tint;
+
+    // Additive blend of ghost onto base
+    float3 result = saturate(base.rgb + tintedG * ghost_opacity);
+    return float4(result, base.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

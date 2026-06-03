@@ -1,0 +1,59 @@
+// Micro Shake
+// Tiny high-frequency camera jitter using UV offsets.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+
+uniform float speed = 18.0;
+uniform float amount = 1.0;
+uniform float zoom_compensation = 0.025;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform bool strong_preset = false;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float hash11(float n)
+{
+    return frac(sin(n * 127.1) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float preset = strong_preset ? 4.0 : 1.0;
+    float frame = floor(elapsed_time * speed);
+    float2 jitter = float2(hash11(frame + 2.0), hash11(frame + 19.0)) - 0.5;
+    jitter *= 0.004 * amount * preset;
+
+    float2 center = float2(center_x, center_y);
+    float zoom = 1.0 + max(0.0, zoom_compensation) + length(jitter) * 2.0;
+    float2 uv = center + (v_in.uv - center) / zoom - jitter;
+    return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

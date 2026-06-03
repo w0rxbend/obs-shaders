@@ -1,0 +1,71 @@
+// N4 — spiral-warp
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: UV twisted by angle proportional to distance — hypnotic static or animated spiral
+// Chain order: Early in chain before any blur or compositing
+
+uniform float4x4 ViewProj;
+uniform float twist_amount = 3.0;   // 0.0–10.0
+uniform float zoom         = 1.0;   // 0.5–2.0
+uniform bool  animated     = false;
+uniform float speed        = 0.5;   // 0.0–2.0
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Center-relative coords
+    float2 p = uv - 0.5;
+
+    // Zoom
+    p /= max(zoom, 0.0001);
+
+    float r     = length(p);
+    float angle = atan2(p.y, p.x);
+
+    // Twist: rotate by twist_amount * r radians
+    float timeOffset = animated ? (elapsed_time * speed) : 0.0;
+    float twist      = twist_amount * r + timeOffset;
+    angle += twist;
+
+    // Reconstruct UV
+    float2 q;
+    q.x = r * cos(angle);
+    q.y = r * sin(angle);
+
+    float2 sampleUV = clamp(q + 0.5, 0.0, 1.0);
+    return image.Sample(textureSampler, sampleUV);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

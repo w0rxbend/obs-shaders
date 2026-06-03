@@ -1,0 +1,51 @@
+// Gentle Zoom In/Out Breathing
+// Slow animated source zoom around a configurable center.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+
+uniform float speed = 0.5;
+uniform float amount = 1.0;
+uniform float zoom_compensation = 0.02;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform bool strong_preset = false;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float preset = strong_preset ? 3.0 : 1.0;
+    float breath = (sin(elapsed_time * speed) * 0.5 + 0.5) * 0.022 * amount * preset;
+    float zoom = 1.0 + max(0.0, zoom_compensation) + breath;
+    float2 center = float2(center_x, center_y);
+    float2 uv = center + (v_in.uv - center) / zoom;
+    return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

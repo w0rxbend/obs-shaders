@@ -1,0 +1,71 @@
+// D4 — dream-blur
+// Dreamy glow blur — soft Gaussian-like blur mixed back with original.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2   uv_pixel_interval;
+
+uniform float blur_amount = 8.0;
+uniform float strength    = 0.6;
+uniform float glow_boost  = 0.2;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 blur9(float2 uv, float2 step_uv)
+{
+    float4 blurred = float4(0.0, 0.0, 0.0, 0.0);
+    blurred += image.Sample(textureSampler, uv + float2(-step_uv.x, -step_uv.y)) * 0.0625;
+    blurred += image.Sample(textureSampler, uv + float2( 0.0,       -step_uv.y)) * 0.1250;
+    blurred += image.Sample(textureSampler, uv + float2( step_uv.x, -step_uv.y)) * 0.0625;
+    blurred += image.Sample(textureSampler, uv + float2(-step_uv.x,  0.0))       * 0.1250;
+    blurred += image.Sample(textureSampler, uv)                                  * 0.2500;
+    blurred += image.Sample(textureSampler, uv + float2( step_uv.x,  0.0))       * 0.1250;
+    blurred += image.Sample(textureSampler, uv + float2(-step_uv.x,  step_uv.y)) * 0.0625;
+    blurred += image.Sample(textureSampler, uv + float2( 0.0,        step_uv.y)) * 0.1250;
+    blurred += image.Sample(textureSampler, uv + float2( step_uv.x,  step_uv.y)) * 0.0625;
+    return blurred;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv      = v_in.uv;
+    float4 sharp   = image.Sample(textureSampler, uv);
+    float2 step_uv = uv_pixel_interval * blur_amount;
+
+    // Single 9-tap Gaussian-like blur for OBS portability.
+    float4 softBlur = blur9(uv, step_uv * 1.6);
+
+    // Glow boost: additive bright areas
+    float  lumaSoft = dot(softBlur.rgb, float3(0.299, 0.587, 0.114));
+    float4 glow     = softBlur * saturate(lumaSoft + glow_boost);
+
+    // Mix: sharp + blurred glow
+    float4 result = lerp(sharp, glow, strength);
+    return float4(saturate(result.rgb), sharp.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

@@ -1,0 +1,61 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Circular iris reveal — image appears inside an expanding circle
+// Chain order: Apply last; combine with color grades before this
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float progress   = 0.5;   // 0.0 = fully hidden, 1.0 = fully revealed
+uniform float softness   = 0.02;  // 0.0–0.1 edge feather
+uniform float center_x   = 0.5;   // horizontal center of iris
+uniform float center_y   = 0.5;   // vertical center of iris
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv     = v_in.uv;
+    float4 color  = image.Sample(textureSampler, uv);
+
+    // Vector from center to current pixel (corrected for aspect via uv space)
+    float2 delta  = uv - float2(center_x, center_y);
+    // Use uniform aspect — works for any source since uv is 0-1
+    float dist    = length(delta);
+
+    // radius goes from 0 (nothing visible) to ~0.8 (covers corners at 0.5,0.5)
+    float maxR    = 0.7072; // half-diagonal of unit square
+    float radius  = progress * maxR;
+
+    float alpha   = 1.0 - smoothstep(radius - softness, radius + softness, dist);
+
+    color.a      *= alpha;
+    return color;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

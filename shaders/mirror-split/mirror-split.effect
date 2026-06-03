@@ -1,0 +1,84 @@
+// N2 — mirror-split
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Split image at axis and mirror one half onto the other
+// Chain order: Early in chain; combine with color grade after
+
+uniform float4x4 ViewProj;
+uniform float axis      = 0.0;   // 0.0 = horizontal, 1.0 = vertical
+uniform bool  flip_side = false; // which half is the source
+uniform float blend     = 1.0;   // 0.0–1.0 crossfade between original and mirrored
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Original color for blend
+    float4 orig = image.Sample(textureSampler, uv);
+
+    float2 mirrorUV = uv;
+
+    if (axis < 0.5)
+    {
+        // Horizontal split — mirror across y = 0.5
+        float srcY = flip_side ? (1.0 - uv.y) : uv.y;
+        float pivot = 0.5;
+        if (srcY > pivot)
+            mirrorUV.y = 2.0 * pivot - uv.y;
+        else
+            mirrorUV.y = uv.y;
+
+        if (flip_side)
+            mirrorUV.y = 1.0 - mirrorUV.y;
+    }
+    else
+    {
+        // Vertical split — mirror across x = 0.5
+        float srcX = flip_side ? (1.0 - uv.x) : uv.x;
+        float pivot = 0.5;
+        if (srcX > pivot)
+            mirrorUV.x = 2.0 * pivot - uv.x;
+        else
+            mirrorUV.x = uv.x;
+
+        if (flip_side)
+            mirrorUV.x = 1.0 - mirrorUV.x;
+    }
+
+    mirrorUV = clamp(mirrorUV, 0.0, 1.0);
+    float4 mirrored = image.Sample(textureSampler, mirrorUV);
+
+    return lerp(orig, mirrored, clamp(blend, 0.0, 1.0));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

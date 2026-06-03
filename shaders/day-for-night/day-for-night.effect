@@ -1,0 +1,78 @@
+// L3 — day-for-night
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Convert daytime footage to moonlit night — darken, desaturate, blue-cyan push, vignette
+// Chain order: early in chain; combine with noise/grain after
+
+uniform float4x4 ViewProj;
+uniform float darkness  = 0.55; // 0.0 – 1.0
+uniform float blue_push = 0.4;  // 0.0 – 1.0
+uniform float desat     = 0.5;  // 0.0 – 1.0
+uniform float vignette  = 0.4;  // 0.0 – 1.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float luma(float3 c)
+{
+    return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float4 col = image.Sample(textureSampler, v_in.uv);
+    float3 c   = col.rgb;
+
+    // Darken
+    float darken_factor = 1.0 - darkness * 0.75;
+    c *= darken_factor;
+
+    // Desaturate
+    float lum = luma(c);
+    float3 grey = float3(lum, lum, lum);
+    c = lerp(c, grey, desat);
+
+    // Blue-cyan push: lift blue channel, slight cyan in midtones
+    c.b += blue_push * 0.35;
+    c.g += blue_push * 0.08;
+    c.r -= blue_push * 0.10;
+
+    // Vignette
+    float2 uv = v_in.uv;
+    float2 centered = uv - float2(0.5, 0.5);
+    float vd = dot(centered, centered) * 2.0;
+    float vig = 1.0 - clamp(vd * vignette * 1.2, 0.0, 1.0);
+    c *= vig;
+
+    c = clamp(c, 0.0, 1.0);
+    return float4(c, col.a);
+}
+
+technique Draw
+{
+    pass p0
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

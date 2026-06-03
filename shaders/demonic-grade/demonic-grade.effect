@@ -1,0 +1,67 @@
+// D7 — demonic-grade
+// High-contrast red/black grade: shadows go deep red, highlights remain,
+// very crushed look.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float strength    = 0.8;
+uniform float shadow_red  = 0.15;
+uniform float contrast    = 2.5;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+    float3 rgb = col.rgb;
+
+    float luma = dot(rgb, float3(0.299, 0.587, 0.114));
+
+    // Hard contrast crush around 0.5
+    float contrasted = saturate((luma - 0.5) * contrast + 0.5);
+
+    // Shadow mask: dark pixels -> deep red
+    float shadowMask = 1.0 - smoothstep(0.0, 0.45, contrasted);
+
+    // Base is mostly luma with reds kept from original
+    float3 base = float3(contrasted, contrasted * 0.55, contrasted * 0.45);
+
+    // Inject shadow red: very dark areas get a deep crimson instead of pure black
+    float3 shadowColor = float3(shadow_red, 0.0, 0.0);
+    float3 demonicBase = lerp(base, shadowColor, shadowMask * 0.8);
+
+    // Restore a hint of original colour in highlights
+    float highlightMask = smoothstep(0.55, 1.0, contrasted);
+    float3 withHighlights = lerp(demonicBase, demonicBase + rgb * 0.2, highlightMask);
+
+    float3 result = lerp(rgb, saturate(withHighlights), strength);
+    return float4(result, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

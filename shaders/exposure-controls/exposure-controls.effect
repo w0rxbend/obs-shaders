@@ -1,0 +1,44 @@
+// A7 — exposure-controls
+// Exposure (EV), gamma, contrast, and saturation in one shader.
+
+uniform float exposure   = 0.0; // -3.0 – 3.0 EV
+uniform float gamma      = 1.0; // 0.1 – 3.0
+uniform float contrast   = 1.0; // 0.0 – 3.0
+uniform float saturation = 1.0; // 0.0 – 3.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    float3 c = col.rgb;
+
+    // 1. Exposure: multiply by 2^EV
+    c *= pow(2.0, exposure);
+
+    // 2. Gamma correction: c^(1/gamma)
+    float g = max(gamma, 0.001);
+    c = pow(max(c, 0.0), float3(1.0 / g, 1.0 / g, 1.0 / g));
+
+    // 3. Contrast: pivot at 0.5, scale away from pivot
+    c = (c - 0.5) * contrast + 0.5;
+
+    // 4. Saturation
+    float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+    c = lerp(float3(luma, luma, luma), c, saturation);
+
+    return float4(saturate(c), col.a);
+}

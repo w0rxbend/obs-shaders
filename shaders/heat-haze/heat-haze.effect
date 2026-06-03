@@ -1,0 +1,68 @@
+// B9 — heat-haze
+// Heat shimmer / haze distortion: animated rising ripple using layered sine noise.
+// strength : distortion magnitude  (0.0–0.05, default 0.015)
+// speed    : upward drift speed    (0.0–5.0,  default 2.0)
+// scale    : noise spatial scale   (1.0–20.0, default 6.0)
+
+uniform float strength = 0.015;
+uniform float speed    = 2.0;
+uniform float scale    = 6.0;
+
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Smooth pseudo-random hash
+float hash(float2 p)
+{
+    p = frac(p * float2(127.1, 311.7));
+    p += dot(p, p.yx + 19.19);
+    return frac(p.x * p.y);
+}
+
+// Value noise — bilinear interpolation of hashed corners
+float noise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f); // smoothstep
+
+    float a = hash(i);
+    float b = hash(i + float2(1.0, 0.0));
+    float c = hash(i + float2(0.0, 1.0));
+    float d = hash(i + float2(1.0, 1.0));
+
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Rising coordinate: heat rises upward, so shift the noise lookup downward over time
+    float2 noiseUV = uv * scale + float2(0.0, -elapsed_time * speed);
+
+    // Two octaves of noise for a more organic shimmer
+    float n1 = noise(noiseUV);
+    float n2 = noise(noiseUV * 2.1 + float2(5.2, 1.3));
+
+    float n = (n1 + n2 * 0.5) / 1.5;
+
+    // Map noise [0,1] to a centered displacement [-1,1]
+    float2 distortion = float2(n * 2.0 - 1.0, (n2 * 2.0 - 1.0) * 0.5);
+
+    float2 uvWarp = saturate(uv + distortion * strength);
+
+    return image.Sample(textureSampler, uvWarp);
+}

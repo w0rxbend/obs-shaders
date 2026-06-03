@@ -1,0 +1,99 @@
+// J5 — dropout-lines
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Random animated horizontal dropout lines going to black or white
+// Chain order: apply near end of chain, after all warping/color effects
+
+uniform float4x4 ViewProj;
+uniform float dropout_amount = 0.08;  // 0.0 – 0.3    fraction of lines that can drop out
+uniform float dropout_speed  = 4.0;   // 0.5 – 10.0   animation speed
+uniform bool  white_dropout  = false; // false=black, true=white dropouts
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float Hash11(float x)
+{
+    return frac(sin(x * 127.1) * 43758.5453);
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Compute line identity
+    float lineF  = uv.y / uv_pixel_interval.y;
+    float lineId = floor(lineF);
+
+    // Time seed: update at dropout_speed rate, introduce coarse frame quantization
+    float timeSeed = floor(elapsed_time * dropout_speed);
+
+    // Per-line random value that changes with time
+    float lineRand = Hash21(float2(lineId, timeSeed));
+
+    // Secondary slower seed for dropout clustering
+    float slowSeed = floor(elapsed_time * dropout_speed * 0.25);
+    float clusterRand = Hash21(float2(lineId * 0.1, slowSeed));
+
+    // Threshold: line drops out if rand < dropout_amount
+    // Use a nonlinear ramp so bursts of dropouts cluster naturally
+    float threshold = dropout_amount * (0.5 + clusterRand * 0.5);
+    float isDropout = step(lineRand, threshold);
+
+    // Determine dropout color
+    float3 dropColor = white_dropout ? float3(1.0, 1.0, 1.0) : float3(0.0, 0.0, 0.0);
+
+    // Partial dropout: some lines go partial (thinner band or partial width)
+    float partialRand = Hash21(float2(lineId * 5.3, timeSeed + 1.0));
+    float partialFade = step(0.7, partialRand); // 30% of dropouts are partial
+
+    // For partial dropouts, only affect a portion of the horizontal span
+    float spanRand  = Hash21(float2(lineId * 2.7, timeSeed + 2.0));
+    float spanStart = spanRand * 0.6;
+    float spanEnd   = spanStart + 0.3 + partialRand * 0.4;
+    float inSpan    = step(spanStart, uv.x) * step(uv.x, spanEnd);
+
+    float dropMask = isDropout * lerp(1.0, inSpan, partialFade);
+
+    float3 rgb = lerp(col.rgb, dropColor, dropMask);
+
+    return float4(saturate(rgb), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

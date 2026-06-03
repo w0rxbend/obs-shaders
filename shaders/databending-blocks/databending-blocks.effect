@@ -1,0 +1,94 @@
+// N7 — databending-blocks
+// Performance: low
+// Webcam safe: no
+// Preserves alpha: yes
+// Use case: Data-corruption aesthetic — image split into blocks with random UV offsets
+// Chain order: Last or near-last in chain; pair with chromatic-aberration or digital-noise
+
+uniform float4x4 ViewProj;
+uniform float block_size  = 10.0;  // 4.0–32.0 (pixels, conceptual — as fraction of 100)
+uniform float corruption  = 0.3;   // 0.0–1.0
+uniform float speed       = 2.0;   // 0.0–5.0
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash1(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float hash1f(float v)
+{
+    return frac(sin(v * 74.3321) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Block coordinate (in UV space, block_size is in hundredths)
+    float  invScale  = block_size / 100.0;
+    float2 blockCoord = floor(uv / invScale);
+
+    // Time-stepped seed — blocks update at discrete time intervals
+    float timeSlot = floor(elapsed_time * speed);
+
+    // Per-block random seed
+    float seed = hash1(blockCoord + float2(timeSlot * 1.37, timeSlot * 0.71));
+
+    // Only corrupt blocks that are "active" this frame
+    float4 col;
+    if (seed < corruption)
+    {
+        // Random UV offset for this block
+        float ox = (hash1f(seed * 13.7) * 2.0 - 1.0) * 0.25;  // up to 25% shift
+        float oy = (hash1f(seed * 27.3) * 2.0 - 1.0) * 0.1;
+
+        // Occasionally flip to a different block entirely (extreme corruption)
+        float2 corruptedUV = uv + float2(ox, oy);
+        corruptedUV = clamp(corruptedUV, 0.0, 1.0);
+
+        // Optionally invert or tint
+        col = image.Sample(textureSampler, corruptedUV);
+
+        // Occasionally apply channel swap
+        if (seed < corruption * 0.3)
+            col.rgb = col.brg;  // channel shuffle
+    }
+    else
+    {
+        col = image.Sample(textureSampler, uv);
+    }
+
+    return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

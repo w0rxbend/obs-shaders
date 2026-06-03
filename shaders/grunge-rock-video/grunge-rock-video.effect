@@ -1,0 +1,100 @@
+// K2 — grunge-rock-video
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: High contrast, desaturated, dirty procedural grain, slight red-shadow tint
+// Chain order: apply after any warp/distortion, before output
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float    elapsed_time;
+
+uniform float contrast      = 2.2;  // 1.0–4.0
+uniform float desat         = 0.6;  // 0.0–1.0
+uniform float grain_strength = 0.18; // 0.0–0.4
+uniform float red_shadows   = 0.1;  // 0.0–0.3
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// 2D noise for grain texture
+float noise2(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + float2(1.0, 0.0));
+    float c = hash21(i + float2(0.0, 1.0));
+    float d = hash21(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 src = image.Sample(textureSampler, uv);
+
+    // Desaturate
+    float luma = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float3 col = lerp(src.rgb, float3(luma, luma, luma), desat);
+
+    // High contrast: pivot at 0.5
+    col = (col - 0.5) * contrast + 0.5;
+    col = saturate(col);
+
+    // Crush blacks slightly for dirty feel
+    col = pow(col, float3(1.2, 1.2, 1.2));
+
+    // Red shadow tint: add red in dark areas
+    float shadowMask = saturate(1.0 - luma * 2.0);
+    col.r += shadowMask * red_shadows;
+    col   = saturate(col);
+
+    // Procedural animated grain
+    float t    = floor(elapsed_time * 24.0); // 24fps grain animation
+    float2 gp  = uv * float2(1280.0, 720.0) + float2(t * 17.3, t * 31.7);
+    float grain = (noise2(gp) - 0.5) * 2.0; // -1..1
+    // Add grain more strongly in mids, less in blacks/whites
+    float grainMask = 1.0 - abs(luma - 0.5) * 1.5;
+    grainMask = saturate(grainMask);
+    col += grain * grain_strength * grainMask;
+    col  = saturate(col);
+
+    // Slight vignette for focus
+    float2 vig_uv = uv * 2.0 - 1.0;
+    float vig = 1.0 - dot(vig_uv, vig_uv) * 0.3;
+    col *= saturate(vig);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

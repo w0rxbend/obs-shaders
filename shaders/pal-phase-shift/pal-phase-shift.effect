@@ -1,0 +1,94 @@
+// J1 — pal-phase-shift
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: PAL broadcast chroma phase alternation — every other line has rotated/inverted chroma
+// Chain order: apply before noise/grain shaders, after color grading
+
+uniform float4x4 ViewProj;
+uniform float phase_strength = 0.4;  // 0.0 – 1.0
+uniform float line_jitter    = 0.001; // 0.0 – 0.005
+
+uniform texture2d image;
+uniform float2 uv_pixel_interval;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// RGB to YUV (BT.601)
+float3 RGBtoYUV(float3 c)
+{
+    float y =  0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+    float u = -0.147 * c.r - 0.289 * c.g + 0.436 * c.b;
+    float v =  0.615 * c.r - 0.515 * c.g - 0.100 * c.b;
+    return float3(y, u, v);
+}
+
+// YUV to RGB (BT.601)
+float3 YUVtoRGB(float3 yuv)
+{
+    float r = yuv.x + 1.140 * yuv.z;
+    float g = yuv.x - 0.395 * yuv.y - 0.581 * yuv.z;
+    float b = yuv.x + 2.032 * yuv.y;
+    return float3(r, g, b);
+}
+
+float Hash11(float x)
+{
+    return frac(sin(x * 127.1) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Determine line number (0-based) in screen space
+    float lineF = uv.y / uv_pixel_interval.y;
+    float lineId = floor(lineF);
+
+    // Per-line sub-pixel jitter on UV.x to simulate PAL line timing drift
+    float jit = (Hash11(lineId * 31.7) - 0.5) * 2.0 * line_jitter;
+    float2 sampUv = float2(saturate(uv.x + jit), uv.y);
+
+    float4 col = image.Sample(textureSampler, sampUv);
+    float3 yuv = RGBtoYUV(col.rgb);
+
+    // PAL: on odd lines the V phase is inverted (phase alternating line)
+    float isOdd = fmod(lineId, 2.0);  // 0 on even, 1 on odd
+    float phaseSign = 1.0 - 2.0 * isOdd; // +1 even, -1 odd
+
+    // Invert U component on odd rows to simulate PAL phase reversal
+    float3 yuvShifted = float3(yuv.x, yuv.y * phaseSign, yuv.z);
+
+    // Lerp between original and phase-shifted by strength
+    float3 yuvFinal = lerp(yuv, yuvShifted, phase_strength);
+
+    float3 rgb = YUVtoRGB(yuvFinal);
+    return float4(saturate(rgb), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

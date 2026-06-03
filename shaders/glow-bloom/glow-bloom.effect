@@ -1,0 +1,73 @@
+// A10 — glow-bloom
+// Additive bloom on bright areas (threshold-based glow).
+
+uniform float threshold = 0.7; // 0.0 – 1.0
+uniform float strength  = 0.8; // 0.0 – 3.0
+uniform float blur_size = 3.0; // 0.5 – 10.0
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Extract bright areas above threshold
+float3 brightPass(float2 uv)
+{
+    float4 s    = image.Sample(textureSampler, uv);
+    float  luma = dot(s.rgb, float3(0.2126, 0.7152, 0.0722));
+    float  t    = max(threshold, 0.0);
+    float  mask = smoothstep(t, t + 0.1, luma);
+    return s.rgb * mask;
+}
+
+// 13-tap cross + diagonal Gaussian-ish blur for the bloom layer
+float3 bloomBlur(float2 uv, float scale)
+{
+    float2 px = uv_pixel_interval * scale;
+    float3 acc = float3(0.0, 0.0, 0.0);
+    float  w   = 0.0;
+
+    // Center weight 4
+    acc += brightPass(uv) * 4.0;        w += 4.0;
+    // Cardinal neighbors weight 2
+    acc += brightPass(uv + float2( px.x,  0.0)) * 2.0; w += 2.0;
+    acc += brightPass(uv + float2(-px.x,  0.0)) * 2.0; w += 2.0;
+    acc += brightPass(uv + float2(  0.0,  px.y)) * 2.0; w += 2.0;
+    acc += brightPass(uv + float2(  0.0, -px.y)) * 2.0; w += 2.0;
+    // Diagonal neighbors weight 1
+    acc += brightPass(uv + float2( px.x,  px.y)) * 1.0; w += 1.0;
+    acc += brightPass(uv + float2(-px.x,  px.y)) * 1.0; w += 1.0;
+    acc += brightPass(uv + float2( px.x, -px.y)) * 1.0; w += 1.0;
+    acc += brightPass(uv + float2(-px.x, -px.y)) * 1.0; w += 1.0;
+    // Wider cardinal taps weight 1
+    acc += brightPass(uv + float2( px.x * 2.0,  0.0)) * 1.0; w += 1.0;
+    acc += brightPass(uv + float2(-px.x * 2.0,  0.0)) * 1.0; w += 1.0;
+    acc += brightPass(uv + float2(  0.0,  px.y * 2.0)) * 1.0; w += 1.0;
+    acc += brightPass(uv + float2(  0.0, -px.y * 2.0)) * 1.0; w += 1.0;
+
+    return acc / w;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Two-scale bloom: fine + coarse for a more natural glow shape
+    float3 bloom1 = bloomBlur(uv, blur_size);
+    float3 bloom2 = bloomBlur(uv, blur_size * 2.0);
+    float3 bloom  = (bloom1 + bloom2) * 0.5;
+
+    // Additive blend
+    float3 result = col.rgb + bloom * strength;
+    return float4(saturate(result), col.a);
+}

@@ -1,0 +1,48 @@
+// OBS ShaderFilter — Minimal Compatibility Test Shader
+// =====================================================
+// Purpose : Verify that OBS ShaderFilter accepts the base syntax used by
+//           every shader in this library. Drop this on any source; the
+//           image should appear completely unchanged at opacity=1.0.
+//
+// Tested with : obs-shaderfilter v1.x / v2.x (exeldro)
+// Syntax      : HLSL-style .effect (NOT GLSL)
+//
+// If this shader fails to compile, check:
+//   1. obs-shaderfilter plugin is installed and enabled
+//   2. You are loading a .effect file, not a .hlsl file
+//   3. OBS is restarted after plugin install
+// =====================================================
+
+// --- Uniforms (OBS injects these; declare to expose in UI) ----------------
+uniform float opacity = 1.0;        // 0.0–1.0  pass-through opacity test
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// --- Built-in uniforms provided by obs-shaderfilter -----------------------
+// (declare any you want to use; OBS will populate them automatically)
+// uniform float  elapsed_time;     // seconds since filter activated
+// uniform float2 uv_pixel_interval; // (1/width, 1/height) — use for neighbour sampling
+// uniform float2 uv_size;          // (width, height) in pixels
+
+// --- Entry point ----------------------------------------------------------
+// Signature is fixed: float4 mainImage(VertData v_in) : TARGET
+// OBS provides: image (Texture2D), textureSampler (SamplerState), VertData
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;                              // [0,1] top-left origin
+    float4 col = image.Sample(textureSampler, uv);     // sample source texture
+
+    col.a *= opacity;   // apply opacity uniform — tests uniform injection
+
+    return col;         // return unchanged (except opacity)
+}

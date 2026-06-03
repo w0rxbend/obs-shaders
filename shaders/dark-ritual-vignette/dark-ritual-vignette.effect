@@ -1,0 +1,77 @@
+// D10 — dark-ritual-vignette
+// Heavy dark vignette that pulses slightly. Deep black edges,
+// occasional flickering via high-frequency noise on the pulse.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float    elapsed_time;
+
+uniform float strength    = 0.85;
+uniform float softness    = 0.4;
+uniform float pulse_speed = 0.5;
+uniform float pulse_depth = 0.1;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Simple 1D hash for flicker
+float hash1(float t)
+{
+    return frac(sin(t * 127.1) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Distance from centre, shaped for vignette
+    float2 centered = (uv - 0.5) * 2.0;  // -1..1 range
+    float  dist     = length(centered);
+
+    // Soften the vignette edge: inner radius controlled by softness
+    float innerRadius = 1.0 - softness;             // how far center is clear
+    float vigRaw      = smoothstep(innerRadius, 1.8, dist);
+
+    // Slow pulse: sin oscillation ±pulse_depth on vignette strength
+    float pulse = sin(elapsed_time * pulse_speed * 3.14159 * 2.0) * 0.5 + 0.5;
+    float pulsedStrength = strength + pulse * pulse_depth - pulse_depth * 0.5;
+
+    // Occasional flicker: random very-short brightening (~2 Hz flicker rate)
+    float flickerTime = floor(elapsed_time * 18.0); // 18 fps flicker resolution
+    float flicker     = hash1(flickerTime);
+    // Most frames flicker = near 0 (no change); rarely it spikes up briefly
+    float flickerMask = step(0.93, flicker) * 0.15; // 7% of frames, reduce vignette
+    pulsedStrength    = saturate(pulsedStrength - flickerMask);
+
+    // Apply: vignette darkens toward pure black at edges
+    float vigAmount = vigRaw * pulsedStrength;
+    float3 result   = col.rgb * (1.0 - vigAmount);
+
+    return float4(saturate(result), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

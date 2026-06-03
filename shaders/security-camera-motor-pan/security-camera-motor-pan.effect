@@ -1,0 +1,56 @@
+// Security Camera Motor Pan
+// Mechanical side-to-side motorized pan simulated by UV movement.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+
+uniform float speed = 0.25;
+uniform float amount = 1.0;
+uniform float zoom_compensation = 0.08;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform bool strong_preset = false;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float t = elapsed_time * speed;
+    float preset = strong_preset ? 2.4 : 1.0;
+    float motor = sin(t);
+    float eased = sign(motor) * pow(abs(motor), 0.65);
+    float step_jitter = sin(floor(t * 20.0) * 0.7) * 0.0015;
+    float2 offset = float2((eased * 0.050 + step_jitter) * amount * preset, 0.0);
+
+    float2 center = float2(center_x, center_y);
+    float zoom = 1.0 + max(0.0, zoom_compensation) + abs(offset.x) * 1.8;
+    float2 uv = center + (v_in.uv - center) / zoom - offset;
+    return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

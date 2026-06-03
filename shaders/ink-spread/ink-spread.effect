@@ -1,0 +1,90 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Ink blot spreads from center, revealing image in organic blob shape
+// Chain order: Apply last; combine with watercolor-wash or pencil-sketch before
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float progress  = 0.5;  // 0.0 = fully hidden, 1.0 = fully revealed
+uniform float ink_scale = 2.0;  // 1.0–5.0 noise frequency of blob edges
+uniform float softness  = 0.03; // 0.0–0.1 edge feather
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise2d(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a  = hash2(i + float2(0.0, 0.0));
+    float b  = hash2(i + float2(1.0, 0.0));
+    float c  = hash2(i + float2(0.0, 1.0));
+    float d  = hash2(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+// Three-octave fbm for organic shape
+float fbm(float2 p)
+{
+    float v = 0.0;
+    v += 0.50 * noise2d(p);
+    v += 0.30 * noise2d(p * 2.3 + float2(1.7, 9.2));
+    v += 0.15 * noise2d(p * 5.1 + float2(8.3, 2.8));
+    v += 0.05 * noise2d(p * 11.0 + float2(4.1, 6.7));
+    return v;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv   = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
+
+    // Distance from center
+    float2 delta = uv - float2(0.5, 0.5);
+    float  dist  = length(delta);
+
+    // Noise warps the blob boundary organically
+    float  n     = fbm(uv * ink_scale + float2(2.3, 5.7));
+
+    // Effective "distance" is dist minus organic perturbation
+    float  blobR = progress * 0.8; // max radius scaled to ~cover image
+    float  eff   = dist - n * 0.2; // noise punches inward
+
+    float  alpha = 1.0 - smoothstep(blobR - softness, blobR + softness, eff);
+
+    color.a     *= alpha;
+    return color;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

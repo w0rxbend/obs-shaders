@@ -1,0 +1,94 @@
+// E10 — signal-loss-pulse
+// Periodic complete signal loss: the image cuts to static/noise for a short
+// window then recovers, like a broadcast dropout.
+// loss_frequency : how many loss events per second (0.1–2.0, default 0.5)
+// loss_duration  : fraction of each cycle that is "lost" (0.0–1.0, default 0.2)
+// noise_color    : false = white noise, true = phosphor-green noise
+
+uniform float loss_frequency = 0.5;
+uniform float loss_duration  = 0.2;
+uniform bool  noise_color    = false;
+
+uniform float elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float hash2(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float hash1(float t)
+{
+    return frac(sin(t * 127.1) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Cycle position within one loss period [0, 1)
+    float cycleT = frac(elapsed_time * loss_frequency);
+
+    // Are we in the loss window?
+    float inLoss = step(cycleT, loss_duration);
+
+    // Animated noise tick — fast, feels like real static
+    float tick = floor(elapsed_time * 60.0);
+
+    // Generate static noise at this pixel
+    float n1 = hash2(float2(floor(uv.x * 320.0), floor(uv.y * 180.0)) + tick);
+    float n2 = hash2(float2(floor(uv.x * 320.0) + 1.0, floor(uv.y * 180.0)) + tick * 0.7);
+    // Mix two noise octaves for richer static texture
+    float noise = lerp(n1, n2, 0.5);
+
+    float3 staticColor;
+    if (noise_color)
+    {
+        // Phosphor-green static
+        staticColor = float3(noise * 0.1, noise, noise * 0.15);
+    }
+    else
+    {
+        // White/grey static with some variation
+        float v = lerp(0.1, 0.95, noise);
+        staticColor = float3(v, v, v);
+    }
+
+    // Add horizontal roll artifact during loss: shift rows
+    float rollShift = hash1(floor(uv.y * 64.0) + tick * 0.3) * 0.04 - 0.02;
+    float2 rollUV   = float2(saturate(uv.x + rollShift * inLoss), uv.y);
+
+    float4 orig = image.Sample(textureSampler, rollUV);
+
+    // Transition: brief analog fade at start/end of loss window
+    // Use smoothstep over small fraction of cycle
+    float fadeWidth = min(loss_duration * 0.15, 0.03);
+    float fadeIn    = smoothstep(0.0, fadeWidth, cycleT);             // 0→1 at start
+    float fadeOut   = smoothstep(loss_duration, loss_duration - fadeWidth, cycleT); // 1→0 at end
+
+    // lossBlend goes 0 (clear) → 1 (lost) → 0 (clear)
+    float lossBlend = inLoss * fadeIn * (1.0 - fadeOut) + inLoss * (1.0 - fadeIn) * fadeOut;
+    // Simpler: just use the gate with soft edges
+    lossBlend = inLoss * smoothstep(0.0, fadeWidth, cycleT)
+                       * (1.0 - smoothstep(loss_duration - fadeWidth, loss_duration, cycleT));
+    // Fall back to hard cut when duration is very short
+    lossBlend = max(lossBlend, inLoss * step(fadeWidth * 2.0, loss_duration)
+                                      * step(fadeWidth, cycleT)
+                                      * step(cycleT, loss_duration - fadeWidth));
+    lossBlend = saturate(lossBlend + inLoss * step(loss_duration, fadeWidth * 4.0));
+
+    float3 col = lerp(orig.rgb, staticColor, saturate(lossBlend));
+
+    return float4(col, orig.a);
+}

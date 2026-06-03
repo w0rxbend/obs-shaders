@@ -1,0 +1,50 @@
+// B7 — tunnel-warp
+// Animated tunnel/vortex warp: maps screen into a rotating zoom tunnel.
+// speed : rotation speed  (0.0–2.0, default 0.5)
+// twist : radial twist amount (0.0–5.0, default 2.0)
+// zoom  : tunnel zoom depth   (0.1–2.0, default 0.5)
+
+uniform float speed = 0.5;
+uniform float twist = 2.0;
+uniform float zoom  = 0.5;
+
+uniform float elapsed_time;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Wrap;
+    AddressV = Wrap;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Center coordinates
+    float2 p = uv * 2.0 - 1.0;
+
+    float r   = length(p);
+    float phi = atan2(p.y, p.x);   // angle in [-pi, pi]
+
+    // Tunnel depth: as r shrinks toward 0 we dive "into" the tunnel
+    // Map the radial distance to a repeating UV.x (depth)
+    float depth = zoom / (r + 0.0001);
+
+    // Add twist: angle rotates with depth and time
+    float angle = phi + twist * r + elapsed_time * speed;
+
+    // Convert polar tunnel coords to rectangular UV
+    // Wrap naturally: frac handles the repetition
+    float2 uvWarp;
+    uvWarp.x = frac(depth - elapsed_time * speed);
+    uvWarp.y = frac(angle / (3.14159265 * 2.0));
+
+    return image.Sample(textureSampler, uvWarp);
+}

@@ -1,0 +1,119 @@
+// J6 — camcorder-date
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Old camcorder look — blinking REC dot, date-bar corner, scanlines, warm tint
+// Chain order: apply last in chain, after all scene effects
+
+uniform float4x4 ViewProj;
+uniform float rec_x      = 0.05;  // 0.0 – 1.0    REC dot horizontal position (UV)
+uniform float rec_y      = 0.05;  // 0.0 – 1.0    REC dot vertical position (UV)
+uniform float rec_size   = 0.012; // 0.005 – 0.03 REC dot radius in UV space
+uniform float scanlines  = 0.25;  // 0.0 – 1.0    scanline darkness
+uniform float warmth     = 0.15;  // 0.0 – 0.4    warm color push
+uniform float blink_speed = 1.5;  // 0.5 – 4.0    REC blink rate
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Aspect correction for circular REC dot (assume 16:9)
+    float aspect = 16.0 / 9.0;
+
+    float4 col = image.Sample(textureSampler, uv);
+
+    // --- Warm tint ---
+    col.r = saturate(col.r + warmth * 0.4);
+    col.g = saturate(col.g + warmth * 0.15);
+    col.b = saturate(col.b - warmth * 0.25);
+
+    // --- Scanlines ---
+    float lineF    = uv.y / uv_pixel_interval.y;
+    float scanPos  = frac(lineF * 0.5);
+    float scanMask = smoothstep(0.0, 0.3, scanPos) * (1.0 - smoothstep(0.5, 0.8, scanPos));
+    float scanDark = lerp(1.0, scanMask, scanlines);
+    col.rgb *= scanDark;
+
+    // --- Slight video noise ---
+    float noise = Hash21(float2(floor(uv.x / uv_pixel_interval.x), floor(uv.y / uv_pixel_interval.y))
+                  + float2(floor(elapsed_time * 24.0), 0.0));
+    col.rgb = saturate(col.rgb + (noise - 0.5) * 0.04);
+
+    // --- Date bar (lower-right corner) ---
+    // A dark semi-transparent horizontal stripe at the bottom 6% of screen
+    float barH     = 0.06;
+    float inBar    = step(1.0 - barH, uv.y) * step(uv.x, 0.55);
+    col.rgb        = lerp(col.rgb, col.rgb * 0.35 + float3(0.0, 0.1, 0.05), inBar * 0.85);
+
+    // Faux date text: bright pixelated dots inside bar region
+    // Simulate 7-segment digit columns with coarse block pattern
+    if (inBar > 0.5)
+    {
+        float barUvY = (uv.y - (1.0 - barH)) / barH;
+        float barUvX = uv.x / 0.55;
+        float digitCol = floor(barUvX * 14.0);  // 14 character columns
+        float digitRow = floor(barUvY * 7.0);   // 7 pixel rows
+        float digitRand = Hash21(float2(digitCol, digitRow));
+        float pixelOn = step(0.45, digitRand) * step(0.15, barUvY) * step(barUvY, 0.85);
+        // Amber-green phosphor text color
+        col.rgb = lerp(col.rgb, float3(0.7, 0.9, 0.3), pixelOn * 0.9);
+    }
+
+    // --- REC dot + blink ---
+    float blink = step(0.5, frac(elapsed_time * blink_speed));
+
+    // Distance from REC dot center (aspect-corrected)
+    float2 recCenter = float2(rec_x, rec_y);
+    float2 delta     = (uv - recCenter) * float2(aspect, 1.0);
+    float  dist      = length(delta);
+
+    float inDot = step(dist, rec_size) * blink;
+    // Red filled circle
+    col.rgb = lerp(col.rgb, float3(0.95, 0.05, 0.05), inDot);
+
+    // REC text: two small pixel blocks to the right of the dot
+    float textX = uv.x - (rec_x + rec_size * 1.8);
+    float textY = abs(uv.y - rec_y);
+    float inText = step(0.0, textX) * step(textX, rec_size * 3.5) * step(textY, rec_size * 0.6) * blink;
+    col.rgb = lerp(col.rgb, float3(0.95, 0.95, 0.95), inText * 0.9);
+
+    return float4(saturate(col.rgb), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

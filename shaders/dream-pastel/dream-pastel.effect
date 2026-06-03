@@ -1,0 +1,91 @@
+// F7 — dream-pastel
+// Soft dreamy pastel look: colours pushed toward pastels, additive glow, slight blur.
+
+uniform float4x4 ViewProj;
+uniform float pastel_amount = 0.6;  // 0.0 – 1.0  how strongly to push toward pastels
+uniform float glow_strength = 0.3;  // 0.0 – 1.0  additive glow layer intensity
+uniform float blur_size     = 3.0;  // 0.0 – 8.0  blur radius in pixels for glow
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// 9-tap box blur.
+float4 boxBlur(float2 uv, float scale)
+{
+    float2 px    = uv_pixel_interval * scale;
+    float4 accum = float4(0.0, 0.0, 0.0, 0.0);
+    accum += image.Sample(textureSampler, uv + float2(-px.x, -px.y));
+    accum += image.Sample(textureSampler, uv + float2(  0.0, -px.y));
+    accum += image.Sample(textureSampler, uv + float2( px.x, -px.y));
+    accum += image.Sample(textureSampler, uv + float2(-px.x,   0.0));
+    accum += image.Sample(textureSampler, uv);
+    accum += image.Sample(textureSampler, uv + float2( px.x,   0.0));
+    accum += image.Sample(textureSampler, uv + float2(-px.x,  px.y));
+    accum += image.Sample(textureSampler, uv + float2(  0.0,  px.y));
+    accum += image.Sample(textureSampler, uv + float2( px.x,  px.y));
+    return accum / 9.0;
+}
+
+// Push an RGB colour toward its pastel version.
+// Pastels live in the high-lightness, low-saturation region.
+// Simple approach: lerp each channel toward a high white level.
+float3 toPastel(float3 rgb, float amount)
+{
+    float lum = dot(rgb, float3(0.299, 0.587, 0.114));
+    // Desaturate partially.
+    float3 desat = lerp(rgb, float3(lum, lum, lum), amount * 0.4);
+    // Lift shadows toward a pastel base (bright + tinted).
+    float3 lifted = desat + (1.0 - desat) * amount * 0.45;
+    return saturate(lifted);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 src = image.Sample(textureSampler, uv);
+
+    // Pastel-ise the source colour.
+    float3 pastel = toPastel(src.rgb, pastel_amount);
+
+    // Wide blur used as glow layer (sampled at two scales, averaged).
+    float4 b1  = boxBlur(uv, blur_size);
+    float4 b2  = boxBlur(uv, blur_size * 1.8);
+    float3 glow = (b1.rgb * 0.55 + b2.rgb * 0.45);
+
+    // Screen-blend glow on top of pastel layer.
+    // screen(a,b) = 1 - (1-a)(1-b)
+    float3 screened = 1.0 - (1.0 - pastel) * (1.0 - glow * glow_strength);
+    float3 col = saturate(screened);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

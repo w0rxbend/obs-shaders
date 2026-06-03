@@ -1,0 +1,243 @@
+// shader_confidential_screen_blur.effect
+// Production privacy blur for OBS ShaderFilter.
+//
+// Modes:
+//   1 = Light Privacy   - meetings, presentations, live demos
+//   2 = Strong Privacy  - dashboards, customer data, emails, finance
+//   3 = Maximum Privacy - credentials, security tools, personal information
+//
+// The blur uses one fixed 3x3 Gaussian-like kernel: 9 blur taps maximum.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 uv_pixel_interval;
+uniform float2 uv_size;
+uniform float elapsed_time;
+
+// Mode selector: 1 = Light, 2 = Strong, 3 = Maximum.
+uniform int privacy_mode = 2;
+
+// Required controls. Strength controls are normalized multipliers around the
+// selected mode preset. Defaults are tuned for unreadable text/code at 1080p.
+uniform float blur_strength       = 1.0;  // 0.0-1.5
+uniform float pixelation_strength = 1.0;  // 0.0-1.5
+uniform float privacy_opacity     = 1.0;  // 0.0-1.0
+uniform float dim_amount          = 1.0;  // 0.0-1.5
+uniform float desaturation        = 1.0;  // 0.0-1.5
+uniform float noise_amount        = 1.0;  // 0.0-1.5
+
+uniform bool enable_pixelation = true;
+uniform bool enable_blur       = true;
+uniform bool enable_noise      = true;
+
+// Additional optional control for the frosted-glass wash.
+uniform float frosted_amount = 1.0; // 0.0-1.5
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float luminance(float3 rgb)
+{
+    return dot(rgb, float3(0.299, 0.587, 0.114));
+}
+
+void loadModePreset(out float blur_pixels,
+                    out float block_pixels,
+                    out float opacity,
+                    out float dim,
+                    out float desat,
+                    out float noise,
+                    out float frost)
+{
+    blur_pixels  = 10.0;
+    block_pixels = 10.0;
+    opacity      = 0.78;
+    dim          = 0.08;
+    desat        = 0.28;
+    noise        = 0.035;
+    frost        = 0.16;
+
+    [branch]
+    if (privacy_mode == 2)
+    {
+        blur_pixels  = 20.0;
+        block_pixels = 20.0;
+        opacity      = 0.94;
+        dim          = 0.18;
+        desat        = 0.58;
+        noise        = 0.10;
+        frost        = 0.30;
+    }
+
+    [branch]
+    if (privacy_mode >= 3)
+    {
+        blur_pixels  = 34.0;
+        block_pixels = 36.0;
+        opacity      = 0.985;
+        dim          = 0.30;
+        desat        = 0.88;
+        noise        = 0.20;
+        frost        = 0.48;
+    }
+}
+
+float2 pixelatedUV(float2 uv, float block_pixels)
+{
+    float2 source_pixels = max(float2(1.0, 1.0), uv_size);
+
+    [branch]
+    if (source_pixels.x <= 1.0 || source_pixels.y <= 1.0)
+    {
+        source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.000001, 0.000001)));
+    }
+
+    float block_size = max(1.0, block_pixels);
+    float2 cells = max(float2(1.0, 1.0), source_pixels / block_size);
+    return (floor(uv * cells) + 0.5) / cells;
+}
+
+float4 gaussianBlur9(float2 uv, float blur_pixels)
+{
+    float2 px = uv_pixel_interval * max(0.0, blur_pixels);
+
+    float2 uv00 = clamp(uv + float2(-px.x, -px.y), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv10 = clamp(uv + float2( 0.0,  -px.y), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv20 = clamp(uv + float2( px.x, -px.y), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv01 = clamp(uv + float2(-px.x,  0.0),  float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv11 = clamp(uv,                         float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv21 = clamp(uv + float2( px.x,  0.0),  float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv02 = clamp(uv + float2(-px.x,  px.y), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv12 = clamp(uv + float2( 0.0,   px.y), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv22 = clamp(uv + float2( px.x,  px.y), float2(0.0, 0.0), float2(1.0, 1.0));
+
+    float4 col = float4(0.0, 0.0, 0.0, 0.0);
+    col += image.Sample(textureSampler, uv00) * 0.0625;
+    col += image.Sample(textureSampler, uv10) * 0.1250;
+    col += image.Sample(textureSampler, uv20) * 0.0625;
+    col += image.Sample(textureSampler, uv01) * 0.1250;
+    col += image.Sample(textureSampler, uv11) * 0.2500;
+    col += image.Sample(textureSampler, uv21) * 0.1250;
+    col += image.Sample(textureSampler, uv02) * 0.0625;
+    col += image.Sample(textureSampler, uv12) * 0.1250;
+    col += image.Sample(textureSampler, uv22) * 0.0625;
+
+    return col;
+}
+
+float3 applyPrivacyLook(float3 rgb,
+                        float2 uv,
+                        float block_pixels,
+                        float dim,
+                        float desat,
+                        float noise,
+                        float frost)
+{
+    float luma = luminance(rgb);
+    rgb = lerp(rgb, float3(luma, luma, luma), saturate(desat));
+
+    float3 frost_color = float3(0.90, 0.94, 0.98);
+    rgb = lerp(rgb, frost_color * (0.55 + luma * 0.45), saturate(frost));
+    rgb *= (1.0 - saturate(dim));
+
+    [branch]
+    if (enable_noise)
+    {
+        float2 source_pixels = max(float2(1.0, 1.0), uv_size);
+
+        [branch]
+        if (source_pixels.x <= 1.0 || source_pixels.y <= 1.0)
+        {
+            source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.000001, 0.000001)));
+        }
+
+        float noise_cell = max(2.0, block_pixels * 0.45);
+        float2 noise_uv = floor(uv * source_pixels / noise_cell);
+        float time_step = floor(elapsed_time * 12.0);
+        float grain = hash12(noise_uv + time_step);
+        float fine_grain = hash12(floor(uv * source_pixels * 0.5) + time_step * 3.17);
+        float mixed_noise = (grain * 0.75 + fine_grain * 0.25) - 0.5;
+        rgb += mixed_noise * saturate(noise);
+    }
+
+    return saturate(rgb);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 original = image.Sample(textureSampler, uv);
+
+    float mode_blur;
+    float mode_block;
+    float mode_opacity;
+    float mode_dim;
+    float mode_desat;
+    float mode_noise;
+    float mode_frost;
+    loadModePreset(mode_blur, mode_block, mode_opacity, mode_dim, mode_desat, mode_noise, mode_frost);
+
+    float blur_pixels = mode_blur * max(0.0, blur_strength);
+    float block_pixels = mode_block * max(0.0, pixelation_strength);
+    float blend_amount = saturate(mode_opacity * privacy_opacity);
+    float dim = saturate(mode_dim * max(0.0, dim_amount));
+    float desat = saturate(mode_desat * max(0.0, desaturation));
+    float noise = saturate(mode_noise * max(0.0, noise_amount));
+    float frost = saturate(mode_frost * max(0.0, frosted_amount));
+
+    float2 privacy_uv = uv;
+
+    [branch]
+    if (enable_pixelation)
+    {
+        privacy_uv = pixelatedUV(uv, block_pixels);
+    }
+
+    [branch]
+    if (enable_blur)
+    {
+        float4 protected_image = gaussianBlur9(privacy_uv, blur_pixels);
+        protected_image.rgb = applyPrivacyLook(protected_image.rgb, uv, block_pixels, dim, desat, noise, frost);
+
+        float3 final_rgb = lerp(original.rgb, protected_image.rgb, blend_amount);
+        return float4(saturate(final_rgb), original.a);
+    }
+
+    float4 protected_image = image.Sample(textureSampler, privacy_uv);
+    protected_image.rgb = applyPrivacyLook(protected_image.rgb, uv, block_pixels, dim, desat, noise, frost);
+
+    float3 final_rgb = lerp(original.rgb, protected_image.rgb, blend_amount);
+    return float4(saturate(final_rgb), original.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

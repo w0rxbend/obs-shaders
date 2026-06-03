@@ -1,0 +1,102 @@
+// Filename: shader_022_bleach_bypass.effect
+// Category: Cinematic camera pack
+// Effect: Bleach bypass
+// Visual principle: luminance-aware color remapping, contrast shaping, vignette, and animated grain.
+// What makes it cool: it gives ordinary footage a clear emotional direction in one pass.
+// Suggested source type: webcam, game capture, video source, cinematic scenes
+// Suggested shader-chain combinations: exposure controls -> this shader -> film grain
+// Performance cost: low
+// Alpha safe: no
+// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+uniform float2 uv_size;
+
+uniform float intensity = 1.15;
+uniform float amount = 1.01;
+uniform float speed = 0.83;
+uniform float center_x = 0.5;
+uniform float center_y = 0.5;
+uniform float opacity = 1.0;
+uniform bool preserve_alpha = false;
+
+sampler_state textureSampler {
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float luma3(float3 c)
+{
+    return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float2 rotate2d(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float alphaOut(float sampled_alpha)
+{
+    float a = sampled_alpha;
+    [branch]
+    if (!preserve_alpha)
+    {
+        a = 1.0;
+    }
+    return a * saturate(opacity);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
+    float gray = luma3(color.rgb);
+    float3 tint = float3(1.000, 0.580, 0.250);
+    float3 warm = float3(1.05, 0.88 + 2 * 0.03, 0.72);
+    float3 cool = float3(0.70, 0.88, 1.12);
+    float vignette = smoothstep(0.88, 0.18, length((uv - float2(center_x, center_y)) * float2(1.15, 1.0)));
+    float grain = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.55) + floor(elapsed_time * speed * 18.0)) - 0.5;
+    float3 graded = lerp(color.rgb, float3(gray, gray, gray), 0.12 + 0.18 * amount);
+    graded = (graded - 0.5) * (1.0 + 0.45 * intensity) + 0.5;
+    graded *= lerp(cool, warm, saturate(tint.r + 0.25));
+    graded = lerp(graded, tint * (0.25 + gray * 0.95), 0.20 * intensity);
+    graded *= 0.72 + vignette * 0.38;
+    graded += grain * 0.045 * intensity;
+    return float4(saturate(graded), alphaOut(color.a));
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

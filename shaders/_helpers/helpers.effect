@@ -1,0 +1,190 @@
+// OBS ShaderFilter — Reusable Helper Functions
+// ============================================
+// IMPORTANT: obs-shaderfilter does NOT support #include in most versions.
+// Copy the helpers you need directly into your shader file.
+// This file is a reference / paste source only.
+//
+// All functions are HLSL-compatible and compile-safe in OBS ShaderFilter.
+// ============================================
+
+// ---------------------------------------------------------------------------
+// HASH — deterministic pseudo-random scalar from 2D input
+// ---------------------------------------------------------------------------
+float hash(float2 p)
+{
+    p = frac(p * float2(127.1, 311.7));
+    p += dot(p, p + 19.19);
+    return frac(p.x * p.y);
+}
+
+// One-liner variant (slightly faster, slightly lower quality):
+// float hash(float2 p) { return frac(sin(dot(p, float2(127.1,311.7))) * 43758.5453); }
+
+// ---------------------------------------------------------------------------
+// NOISE — value noise, smooth [0,1] output
+// ---------------------------------------------------------------------------
+float noise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);   // smoothstep
+
+    float a = hash(i);
+    float b = hash(i + float2(1, 0));
+    float c = hash(i + float2(0, 1));
+    float d = hash(i + float2(1, 1));
+
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+// ---------------------------------------------------------------------------
+// FBM — fractal Brownian motion (layered noise)
+// octaves: how many layers (2–6 typical); each halves amplitude, doubles freq
+// ---------------------------------------------------------------------------
+float fbm(float2 p, int octaves)
+{
+    float val   = 0.0;
+    float amp   = 0.5;
+    float freq  = 1.0;
+    float total = 0.0;
+
+    // obs-shaderfilter may not support variable loop counts; unroll manually
+    // or keep octaves small and use [unroll] attribute.
+    for (int i = 0; i < octaves; i++)
+    {
+        val   += noise(p * freq) * amp;
+        total += amp;
+        amp   *= 0.5;
+        freq  *= 2.0;
+    }
+    return val / total;
+}
+
+// ---------------------------------------------------------------------------
+// LUMINANCE — perceptual brightness of an RGB color
+// ---------------------------------------------------------------------------
+float luminance(float3 col)
+{
+    return dot(col, float3(0.299, 0.587, 0.114));
+}
+
+// ---------------------------------------------------------------------------
+// CONTRAST — apply contrast around a pivot (0.5 = midtone pivot)
+// ---------------------------------------------------------------------------
+float3 applyContrast(float3 col, float contrast)
+{
+    return saturate((col - 0.5) * contrast + 0.5);
+}
+
+// ---------------------------------------------------------------------------
+// SATURATION — scale color saturation (0=grey, 1=unchanged, >1=boost)
+// ---------------------------------------------------------------------------
+float3 applySaturation(float3 col, float sat)
+{
+    float lum = luminance(col);
+    return lerp(float3(lum, lum, lum), col, sat);
+}
+
+// ---------------------------------------------------------------------------
+// HUE ROTATION — rotate hue by angle (radians) in RGB space
+// Uses RGB→YIQ→rotate→YIQ→RGB approximation (no matrix, pure HLSL)
+// ---------------------------------------------------------------------------
+float3 rotateHue(float3 col, float angle)
+{
+    float cosA = cos(angle);
+    float sinA = sin(angle);
+
+    float3x3 m = float3x3(
+         0.213 + cosA * 0.787 - sinA * 0.213,
+         0.213 - cosA * 0.213 + sinA * 0.143,
+         0.213 - cosA * 0.213 - sinA * 0.787,
+
+         0.715 - cosA * 0.715 - sinA * 0.715,
+         0.715 + cosA * 0.285 + sinA * 0.140,
+         0.715 - cosA * 0.715 + sinA * 0.715,
+
+         0.072 - cosA * 0.072 + sinA * 0.928,
+         0.072 - cosA * 0.072 - sinA * 0.283,
+         0.072 + cosA * 0.928 + sinA * 0.072
+    );
+    return saturate(mul(m, col));
+}
+
+// ---------------------------------------------------------------------------
+// VIGNETTE — elliptical edge darkening, returns multiplier [0,1]
+// uv:       normalised texcoord [0,1]
+// strength: how dark the edges get (0=none, 1=full black)
+// softness: gradient width (0=hard, 1=very soft)
+// ---------------------------------------------------------------------------
+float vignette(float2 uv, float strength, float softness)
+{
+    float2 d = uv - 0.5;
+    float  r = length(d * float2(1.0, 1.0)); // aspect-neutral; scale x for correction
+    float  v = smoothstep(0.5, 0.5 - softness * 0.5, r);
+    return lerp(1.0, v, strength);
+}
+
+// ---------------------------------------------------------------------------
+// BARREL DISTORTION — polynomial radial warp (k1>0 = barrel, k1<0 = pincushion)
+// Returns warped uv; sample with image.Sample(textureSampler, warpedUV)
+// ---------------------------------------------------------------------------
+float2 barrelDistort(float2 uv, float k1, float k2)
+{
+    float2 d   = uv - 0.5;
+    float  r2  = dot(d, d);
+    float  r4  = r2 * r2;
+    float  warp = 1.0 + k1 * r2 + k2 * r4;
+    return 0.5 + d * warp;
+}
+
+// ---------------------------------------------------------------------------
+// CHROMATIC OFFSET — per-channel radial UV shift from center
+// Returns three UVs: uvR, uvG, uvB to sample each channel separately
+// ---------------------------------------------------------------------------
+void chromaticOffset(float2 uv, float strength, float falloff,
+                     out float2 uvR, out float2 uvG, out float2 uvB)
+{
+    float2 dir = uv - 0.5;
+    float  r   = length(dir);
+    float  w   = pow(max(r * 2.0, 0.0), falloff) * strength;
+    float2 offset = normalize(dir + 0.0001) * w;
+
+    uvR = uv + offset;
+    uvG = uv;               // green is reference channel, no shift
+    uvB = uv - offset;
+}
+
+// ---------------------------------------------------------------------------
+// ROUNDED RECTANGLE MASK — returns 1 inside rounded rect, 0 outside
+// uv:      normalised [0,1] texcoord
+// radius:  corner radius in UV space (0.0–0.5)
+// smooth:  antialiasing width
+// ---------------------------------------------------------------------------
+float roundedRectMask(float2 uv, float radius, float smooth_)
+{
+    float2 d = abs(uv - 0.5) - (0.5 - radius);
+    float  dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+    return 1.0 - smoothstep(-smooth_, smooth_, dist);
+}
+
+// ---------------------------------------------------------------------------
+// POSTERIZATION — reduce color to N discrete levels per channel
+// ---------------------------------------------------------------------------
+float3 posterize(float3 col, float levels)
+{
+    return floor(col * levels + 0.5) / levels;
+}
+
+// ---------------------------------------------------------------------------
+// SCANLINES — horizontal scanline darkening, returns multiplier [0,1]
+// uv:          texcoord
+// line_width:  pixel height of each dark line (in UV-pixel units)
+// darkness:    0=no effect, 1=fully black lines
+// uv_pix:      uv_pixel_interval.y  (1.0 / source_height)
+// ---------------------------------------------------------------------------
+float scanlines(float uv_y, float line_width, float darkness, float uv_pix)
+{
+    float lines = uv_y / (uv_pix * line_width * 2.0);
+    float wave  = sin(lines * 3.14159265);
+    return 1.0 - darkness * saturate(-wave);
+}

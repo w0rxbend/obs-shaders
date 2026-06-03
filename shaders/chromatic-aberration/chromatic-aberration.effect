@@ -1,0 +1,45 @@
+// B4 — chromatic-aberration
+// RGB channels offset radially outward from center (lens fringing).
+// strength : maximum offset in UV units  (0.0–0.05, default 0.01)
+// falloff  : radius exponent — higher = fringing concentrated near edges (0.0–3.0, default 2.0)
+
+uniform float strength = 0.01;
+uniform float falloff  = 2.0;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+
+    // Direction from center
+    float2 center = float2(0.5, 0.5);
+    float2 dir    = uv - center;
+    float  r      = length(dir);
+
+    // Weight grows with radius^falloff — no aberration at center
+    float weight  = pow(r * 2.0, falloff);   // r*2 normalises to ~1 at corners
+    float2 offset = normalize(dir + float2(0.00001, 0.0)) * weight * strength;
+
+    // Red shifted outward, Blue shifted inward, Green stays
+    float2 uvR = saturate(uv + offset);
+    float2 uvG = uv;
+    float2 uvB = saturate(uv - offset);
+
+    float4 colR = image.Sample(textureSampler, uvR);
+    float4 colG = image.Sample(textureSampler, uvG);
+    float4 colB = image.Sample(textureSampler, uvB);
+
+    return float4(colR.r, colG.g, colB.b, colG.a);
+}

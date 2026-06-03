@@ -1,0 +1,70 @@
+// O2 — hexagon-webcam-crop
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Crops webcam feed to a regular hexagon using SDF; outside = alpha 0
+// Chain order: Apply first in chain before any color grading
+
+uniform float4x4 ViewProj;
+uniform float size     = 0.45; // 0.1 – 0.5
+uniform float softness = 0.008; // 0.001 – 0.05
+uniform float rotation = 0.0;  // 0.0 – 3.14159 radians
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Regular hexagon SDF (returns positive outside, negative inside)
+float sdfHexagon(float2 p, float r)
+{
+    // Hexagon constants
+    float2 k = float2(-0.866025404, 0.5); // -sqrt(3)/2, 0.5
+    p = abs(p);
+    p -= 2.0 * min(dot(k, p), 0.0) * k;
+    p -= float2(clamp(p.x, -k.y * r, k.y * r), r);
+    return length(p) * sign(p.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Center and rotate
+    float2 p   = uv - float2(0.5, 0.5);
+    float  c   = cos(rotation);
+    float  s   = sin(rotation);
+    p = float2(p.x * c - p.y * s, p.x * s + p.y * c);
+
+    float  d     = sdfHexagon(p, size);
+    float  alpha = 1.0 - smoothstep(-softness, softness, d);
+
+    col.a *= alpha;
+    return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

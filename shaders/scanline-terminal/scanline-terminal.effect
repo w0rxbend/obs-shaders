@@ -1,0 +1,68 @@
+// E7 — scanline-terminal
+// Green-on-black terminal look: desaturates, applies phosphor-green tint,
+// hard scanlines with configurable gap, and a subtle frame flicker.
+// green_tint   : strength of green colour grading (0.0–1.0, default 1.0)
+// scanline_gap : scanline period in screen-line units (1.0–6.0, default 2.0)
+// flicker      : brightness flicker amplitude (0.0–0.5, default 0.08)
+
+uniform float green_tint   = 1.0;
+uniform float scanline_gap = 2.0;
+uniform float flicker      = 0.08;
+
+uniform float elapsed_time;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float hash1(float t)
+{
+    return frac(sin(t * 127.1) * 43758.5453);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 orig = image.Sample(textureSampler, uv);
+
+    // Desaturate to luminance
+    float lum = dot(orig.rgb, float3(0.2126, 0.7152, 0.0722));
+
+    // Phosphor green: bright green, faint red/blue
+    float3 phosphor = float3(0.0, 1.0, 0.1);
+    float3 col = lerp(float3(lum, lum, lum), float3(lum, lum, lum) * phosphor, green_tint);
+
+    // Hard scanlines: create a dark gap every scanline_gap lines
+    // 256 represents ~half the typical stream height; adjust aesthetics.
+    float lineY    = uv.y * 256.0;
+    float scanPhase = frac(lineY / scanline_gap);
+    // Dark gap in bottom half of each period
+    float scanDark = step(0.5, scanPhase) * 0.55;
+    col *= (1.0 - scanDark);
+
+    // Phosphor inner glow: brighten between scanlines
+    float glow = smoothstep(0.0, 0.3, scanPhase) * (1.0 - smoothstep(0.3, 0.5, scanPhase));
+    col = saturate(col + col * glow * 0.25 * green_tint);
+
+    // Frame flicker
+    float tick    = floor(elapsed_time * 24.0);
+    float flic    = 1.0 - flicker * hash1(tick);
+    col *= flic;
+
+    // Vignette for CRT feel
+    float2 vig   = uv * 2.0 - 1.0;
+    float  vigAmt = 1.0 - dot(vig * float2(0.5, 0.7), vig * float2(0.5, 0.7));
+    vigAmt = saturate(vigAmt * 1.4);
+    col *= vigAmt;
+
+    return float4(saturate(col), orig.a);
+}

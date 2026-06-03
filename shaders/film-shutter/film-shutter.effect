@@ -1,0 +1,65 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Horizontal bars wipe in from center, like a film/iris shutter
+// Chain order: Apply last; layer over crt-scanlines for cinematic combo
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float progress  = 0.5;  // 0.0 = fully hidden (bars closed), 1.0 = fully revealed
+uniform int   bar_count = 8;    // 2–20 number of horizontal shutter bars
+uniform float softness  = 0.01; // 0.0–0.05 bar-edge feather
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv     = v_in.uv;
+    float4 color  = image.Sample(textureSampler, uv);
+
+    float  n      = max((float)bar_count, 1.0);
+    // Which bar are we in? 0..n-1
+    float  barIdx = floor(uv.y * n);
+    // Local position within bar: 0=bottom, 1=top
+    float  barPos = frac(uv.y * n);
+
+    // Each bar opens symmetrically from center (0.5 in barPos space)
+    float  center = 0.5;
+    float  dist   = abs(barPos - center);     // 0 at center, 0.5 at edges
+    // Half-open width of each bar: goes from 0 (closed) to 0.5 (fully open)
+    float  halfOpen = progress * 0.5;
+
+    // Pixel is visible when inside the open region
+    float  soft   = max(softness, 0.001);
+    float  alpha  = smoothstep(dist - soft, dist + soft, halfOpen);
+
+    color.a      *= alpha;
+    return color;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

@@ -1,0 +1,46 @@
+// A9 — blur
+// Box blur / Gaussian approximation using uv_pixel_interval.
+// Uses one fixed 9-tap kernel for OBS real-time safety.
+
+uniform float blur_size = 4.0; // 0.0 – 20.0
+uniform int   passes    = 2;   // 1 – 4  (scales the single-pass radius)
+
+uniform float2    uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Single 9-tap (3x3) box blur at given pixel scale
+float4 boxBlur(float2 uv, float scale)
+{
+    float2 px   = uv_pixel_interval * scale;
+    float4 accum = float4(0.0, 0.0, 0.0, 0.0);
+
+    accum += image.Sample(textureSampler, uv + float2(-px.x, -px.y));
+    accum += image.Sample(textureSampler, uv + float2(  0.0, -px.y));
+    accum += image.Sample(textureSampler, uv + float2( px.x, -px.y));
+    accum += image.Sample(textureSampler, uv + float2(-px.x,   0.0));
+    accum += image.Sample(textureSampler, uv);
+    accum += image.Sample(textureSampler, uv + float2( px.x,   0.0));
+    accum += image.Sample(textureSampler, uv + float2(-px.x,  px.y));
+    accum += image.Sample(textureSampler, uv + float2(  0.0,  px.y));
+    accum += image.Sample(textureSampler, uv + float2( px.x,  px.y));
+
+    return accum / 9.0;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float pass_scale = lerp(1.0, 2.5, saturate((float(passes) - 1.0) / 3.0));
+    return boxBlur(uv, blur_size * pass_scale);
+}

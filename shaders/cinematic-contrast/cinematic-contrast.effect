@@ -1,0 +1,52 @@
+// A5 — cinematic-contrast
+// S-curve contrast boost with lifted blacks (cinematic look).
+
+uniform float contrast   = 1.4; // 0.5 – 3.0
+uniform float black_lift = 0.04; // 0.0 – 0.2
+uniform float saturation = 0.9; // 0.0 – 2.0
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+// Smooth S-curve via smoothstep remapping
+float scurve(float x, float c)
+{
+    // Pivot around 0.5; c > 1 steepens, c < 1 flattens
+    x = saturate(x);
+    // Use a power curve centered at 0.5
+    float s = (x < 0.5)
+        ? 0.5 * pow(2.0 * x, c)
+        : 1.0 - 0.5 * pow(2.0 * (1.0 - x), c);
+    return s;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // 1. Lift blacks
+    float3 lifted = col.rgb * (1.0 - black_lift) + black_lift;
+
+    // 2. S-curve contrast per channel
+    float3 contrasted;
+    contrasted.r = scurve(lifted.r, contrast);
+    contrasted.g = scurve(lifted.g, contrast);
+    contrasted.b = scurve(lifted.b, contrast);
+
+    // 3. Saturation adjustment
+    float luma = dot(contrasted, float3(0.2126, 0.7152, 0.0722));
+    float3 sat = lerp(float3(luma, luma, luma), contrasted, saturation);
+
+    return float4(saturate(sat), col.a);
+}

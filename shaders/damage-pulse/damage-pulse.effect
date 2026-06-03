@@ -1,0 +1,64 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Red vignette pulse for "taking damage" game overlay
+// Chain order: last — sits on top of all other effects
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float pulse_speed  = 3.0;  // 0.5–10.0
+uniform float intensity    = 0.7;  // 0.0–1.0
+uniform float vignette_size = 0.8; // 0.3–1.0
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData v_out;
+    v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    v_out.uv  = v_in.uv;
+    return v_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv   = v_in.uv;
+    float4 col  = image.Sample(textureSampler, uv);
+
+    // Radial distance from center
+    float2 centered = uv - 0.5;
+    float  dist     = length(centered);
+
+    // Smooth vignette mask — 0 at center, 1 at corner edges
+    float mask = smoothstep(vignette_size * 0.5, vignette_size, dist);
+
+    // Pulse: 0..1 oscillation
+    float pulse = abs(sin(elapsed_time * pulse_speed));
+
+    // Red vignette overlay
+    float  strength  = mask * pulse * intensity;
+    float3 red_layer = float3(1.0, 0.0, 0.0);
+
+    float3 result = lerp(col.rgb, red_layer, strength);
+    return float4(result, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

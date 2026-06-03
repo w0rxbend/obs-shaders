@@ -5,6 +5,19 @@
 uniform float strength = 0.7;
 uniform float scale = 20.0;
 
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
 float hash(float2 p)
 {
     p = frac(p * 0.3183099 + float2(.71, .113));

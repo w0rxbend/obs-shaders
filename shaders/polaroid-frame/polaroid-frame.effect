@@ -1,0 +1,74 @@
+// O5 — polaroid-frame
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: yes
+// Use case: Adds classic Polaroid white border (wider at bottom) with warm tint
+// Chain order: Apply after color grading; keep as outermost frame layer
+
+uniform float4x4 ViewProj;
+uniform float border_top    = 0.04; // 0.0 – 0.1
+uniform float border_sides  = 0.04; // 0.0 – 0.1
+uniform float border_bottom = 0.12; // 0.0 – 0.2
+uniform float warmth        = 0.05; // 0.0 – 0.3  (yellow-warm tint on the white border)
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Determine which region we're in
+    bool in_left   = (uv.x < border_sides);
+    bool in_right  = (uv.x > 1.0 - border_sides);
+    bool in_top    = (uv.y < border_top);
+    bool in_bottom = (uv.y > 1.0 - border_bottom);
+
+    bool in_border = in_left || in_right || in_top || in_bottom;
+
+    if (in_border)
+    {
+        // Warm white Polaroid border
+        float3 border_col = float3(1.0 + warmth * 0.2, 1.0, 1.0 - warmth);
+        // Clamp to valid range
+        border_col = clamp(border_col, 0.0, 1.0);
+        return float4(border_col, 1.0);
+    }
+
+    // Map UVs to inner image area
+    float inner_u = (uv.x - border_sides)  / max(1.0 - border_sides  * 2.0, 0.001);
+    float inner_v = (uv.y - border_top)    / max(1.0 - border_top - border_bottom, 0.001);
+
+    inner_u = clamp(inner_u, 0.0, 1.0);
+    inner_v = clamp(inner_v, 0.0, 1.0);
+
+    float4 col = image.Sample(textureSampler, float2(inner_u, inner_v));
+    return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

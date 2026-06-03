@@ -1,0 +1,42 @@
+// B6 — perspective-tilt
+// Fake perspective / camera tilt-shift via a homographic-style warp.
+// tilt_x : horizontal tilt angle  (-0.3–0.3, default 0.0)
+// tilt_y : vertical tilt angle    (-0.3–0.3, default 0.1)
+// zoom   : overall zoom           (0.5–2.0,  default 1.0)
+
+uniform float tilt_x = 0.0;
+uniform float tilt_y = 0.1;
+uniform float zoom   = 1.0;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // Map to [-1, 1] centered
+    float2 p = uv * 2.0 - 1.0;
+
+    // Perspective divide: simulate a tilted plane
+    // w = 1 + tilt_x * x + tilt_y * y   (affine approximation of a perspective)
+    float w = 1.0 + tilt_x * p.x + tilt_y * p.y;
+    w = max(w, 0.01); // avoid division by zero or flip
+
+    float2 pTilted = p / w;
+
+    // Apply zoom
+    float2 uvWarp = saturate((pTilted / zoom + 1.0) * 0.5);
+
+    return image.Sample(textureSampler, uvWarp);
+}

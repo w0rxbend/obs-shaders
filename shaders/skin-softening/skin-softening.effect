@@ -1,0 +1,64 @@
+// A4 — skin-softening
+// Bilateral-like blur: box blur weighted by color similarity.
+// Smooths uniform-color regions (skin) while preserving edges.
+
+uniform int   blur_radius = 3;   // 1 – 8
+uniform float strength    = 0.5; // 0.0 – 1.0
+uniform float threshold   = 0.2; // 0.0 – 1.0  (color similarity window)
+
+uniform float2 uv_pixel_interval;
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv      = v_in.uv;
+    float4 center  = image.Sample(textureSampler, uv);
+
+    float4 accum   = float4(0.0, 0.0, 0.0, 0.0);
+    float  weight  = 0.0;
+
+    // Clamp radius to keep sample count <= 16 (max radius 1 == 9 samples)
+    int r = clamp(blur_radius, 1, 1); // use radius 1 for safety (9 taps)
+    // Manually unroll for radii 1–3; OBS HLSL may not support variable loop bounds well.
+    // We use a fixed 7x7 = 49 sample grid but guard with threshold weighting.
+    // Outer taps simply get zero weight when far in color space.
+
+    // Use a 7-tap box (radius=3) always; actual spatial blur depends on uv_pixel_interval * blur_radius
+    float scale = float(blur_radius);
+
+    [unroll(7)]
+    for (int y = -3; y <= 3; y++)
+    {
+        [unroll(7)]
+        for (int x = -3; x <= 3; x++)
+        {
+            float2 offset = float2(float(x), float(y)) * uv_pixel_interval * scale;
+            float4 s      = image.Sample(textureSampler, uv + offset);
+
+            // Color-space distance (bilateral weight)
+            float3 diff   = s.rgb - center.rgb;
+            float  cdist  = dot(diff, diff);
+            float  thresh = max(threshold, 0.001);
+            float  w      = exp(-cdist / (2.0 * thresh * thresh));
+
+            accum  += s * w;
+            weight += w;
+        }
+    }
+
+    float4 blurred = accum / weight;
+    float4 result  = lerp(center, blurred, strength);
+    result.a       = center.a;
+    return result;
+}

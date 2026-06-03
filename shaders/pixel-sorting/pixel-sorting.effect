@@ -1,0 +1,59 @@
+// E9 — pixel-sorting
+// Approximate pixel sorting: in bright areas the UV coordinate is shifted
+// horizontally (or vertically) based on local luminance, producing the
+// characteristic streaked glitch aesthetic.
+// threshold    : luminance above which sorting activates (0.0–1.0, default 0.6)
+// sort_amount  : maximum UV shift distance (0.0–0.2, default 0.05)
+// direction    : 0.0 = horizontal sort, 1.0 = vertical sort (default 0.0)
+
+uniform float threshold   = 0.6;
+uniform float sort_amount = 0.05;
+uniform float direction   = 0.0;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    float4 orig = image.Sample(textureSampler, uv);
+    float  lum  = dot(orig.rgb, float3(0.2126, 0.7152, 0.0722));
+
+    // How far above threshold are we?
+    float excess = saturate((lum - threshold) / max(1.0 - threshold, 0.001));
+
+    // Shift based on luminance excess — brighter pixels "run" further
+    float shift = excess * sort_amount;
+
+    float2 sortedUV;
+    if (direction < 0.5)
+    {
+        // Horizontal: shift U to the right proportional to brightness
+        sortedUV = float2(saturate(uv.x + shift), uv.y);
+    }
+    else
+    {
+        // Vertical: shift V downward proportional to brightness
+        sortedUV = float2(uv.x, saturate(uv.y + shift));
+    }
+
+    // Sample sorted pixel; below threshold stays original
+    float4 sorted = image.Sample(textureSampler, sortedUV);
+
+    // Blend: only replace when above threshold
+    float blend = step(threshold, lum);
+    float4 result = lerp(orig, sorted, blend);
+    result.a = orig.a;
+    return result;
+}

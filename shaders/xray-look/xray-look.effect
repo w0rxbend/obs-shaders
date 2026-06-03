@@ -1,0 +1,106 @@
+// Performance: low
+// Webcam safe: yes
+// Preserves alpha: no
+// Use case: Inverted high-contrast B&W with Sobel edge enhancement tinted blue and X-ray noise texture
+// Chain order: Apply as standalone sci-fi look; optionally follow with glow-bloom using a blue color for edge glow
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float2 uv_pixel_interval;
+uniform float elapsed_time;
+uniform float contrast       = 2.5;  // 1.0–5.0
+uniform float blue_tint      = 0.35; // 0.0–1.0
+uniform float noise_amount   = 0.05; // 0.0–0.2
+uniform float edge_strength  = 0.8;  // 0.0–2.0
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float luma_at(float2 uv)
+{
+    return dot(image.Sample(textureSampler, uv).rgb, float3(0.299, 0.587, 0.114));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv  = v_in.uv;
+    float4 src = image.Sample(textureSampler, uv);
+
+    // --- Luminance and contrast ---
+    float luma = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    luma = saturate((luma - 0.5) * contrast + 0.5);
+
+    // --- Invert (X-ray: dense areas dark, transparent areas light) ---
+    float xray = 1.0 - luma;
+
+    // --- Sobel edge detection on original luma ---
+    float2 px = uv_pixel_interval;
+
+    float tl = luma_at(uv + float2(-px.x,  px.y));
+    float tm = luma_at(uv + float2( 0.0,   px.y));
+    float tr = luma_at(uv + float2( px.x,  px.y));
+    float ml = luma_at(uv + float2(-px.x,  0.0 ));
+    float mr = luma_at(uv + float2( px.x,  0.0 ));
+    float bl = luma_at(uv + float2(-px.x, -px.y));
+    float bm = luma_at(uv + float2( 0.0,  -px.y));
+    float br = luma_at(uv + float2( px.x, -px.y));
+
+    float gx  = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+    float gy  = -tl - 2.0 * tm - tr + bl + 2.0 * bm + br;
+    float edge = saturate(sqrt(gx * gx + gy * gy) * edge_strength);
+
+    // --- Base B&W ---
+    float3 col = float3(xray, xray, xray);
+
+    // --- Blue tint in the grey midtones ---
+    // Shift towards blue-grey (X-ray film look)
+    float3 blue_shift = float3(
+        xray * (1.0 - blue_tint * 0.3),
+        xray * (1.0 - blue_tint * 0.15),
+        xray * (1.0 + blue_tint * 0.5)
+    );
+    col = lerp(col, blue_shift, blue_tint);
+
+    // --- Edge overlay: bright blue-white edges ---
+    float3 edge_col = float3(0.5, 0.7, 1.0);
+    col += edge_col * edge * (1.0 - blue_tint * 0.3);
+
+    // --- X-ray noise (film grain style) ---
+    float n = hash21(float2(uv.x * 700.0, uv.y * 700.0 + elapsed_time * 10.0));
+    col += (n - 0.5) * noise_amount;
+
+    col = saturate(col);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}

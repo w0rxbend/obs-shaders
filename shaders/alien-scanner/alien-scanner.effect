@@ -1,0 +1,113 @@
+// Performance: medium
+// Webcam safe: yes
+// Preserves alpha: no
+// Use case: Alien thermal-style green/yellow scanner with animated sweep line and Sobel edge enhancement
+// Chain order: Apply as a standalone sci-fi look; works well after sharpening, before bloom
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float elapsed_time;
+uniform float2 uv_pixel_interval;
+uniform float sweep_speed    = 0.8;  // 0.1–3.0
+uniform float edge_strength  = 1.5;  // 0.0–3.0
+uniform float tint_r         = 0.1;
+uniform float tint_g         = 0.8;
+uniform float tint_b         = 0.2;
+uniform float noise_amount   = 0.06; // 0.0–0.2
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float luma(float2 uv)
+{
+    float3 c = image.Sample(textureSampler, uv).rgb;
+    return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+
+    // --- Sobel edge detection ---
+    float2 px = uv_pixel_interval;
+
+    float tl = luma(uv + float2(-px.x,  px.y));
+    float tm = luma(uv + float2( 0.0,   px.y));
+    float tr = luma(uv + float2( px.x,  px.y));
+    float ml = luma(uv + float2(-px.x,  0.0 ));
+    float mr = luma(uv + float2( px.x,  0.0 ));
+    float bl = luma(uv + float2(-px.x, -px.y));
+    float bm = luma(uv + float2( 0.0,  -px.y));
+    float br = luma(uv + float2( px.x, -px.y));
+
+    float gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+    float gy = -tl - 2.0 * tm - tr + bl + 2.0 * bm + br;
+    float edge = sqrt(gx * gx + gy * gy);
+
+    // --- Sample source luma for base ---
+    float4 src  = image.Sample(textureSampler, uv);
+    float  base = dot(src.rgb, float3(0.299, 0.587, 0.114));
+
+    // --- Tint: map luma to user-defined color ---
+    float3 tint_col = float3(tint_r, tint_g, tint_b);
+    // Map base brightness to the tint color range
+    float3 col = base * tint_col * 1.6;
+
+    // --- Add edge enhancement in bright color ---
+    float3 edge_col = float3(tint_r * 0.5 + 0.5, tint_g * 0.5 + 0.8, tint_b * 0.3 + 0.1);
+    col += edge_col * saturate(edge * edge_strength);
+
+    // --- Animated sweep line ---
+    float sweep_pos = fmod(elapsed_time * sweep_speed, 1.0);
+    float sweep_dist = abs(uv.y - sweep_pos);
+    float sweep_band = exp(-sweep_dist * sweep_dist * 800.0);
+    // Sweep line: bright green-yellow flash
+    float3 sweep_col = float3(tint_r * 0.3, 1.0, tint_b * 0.4) * 1.5;
+    col += sweep_col * sweep_band * 0.6;
+    // Dim area behind sweep (already scanned)
+    float behind = (uv.y < sweep_pos) ? 0.9 : 1.0;
+    col *= behind;
+
+    // --- Scan noise ---
+    float n = hash21(float2(uv.x * 500.0, uv.y * 500.0 + elapsed_time * 20.0));
+    col += (n - 0.5) * noise_amount * tint_col;
+
+    // --- Scanlines ---
+    float scan = sin(uv.y * 700.0) * 0.5 + 0.5;
+    col *= lerp(0.8, 1.0, pow(scan, 1.5));
+
+    col = saturate(col);
+
+    return float4(col, src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = mainImage(v_in);
+    }
+}
