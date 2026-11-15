@@ -11,17 +11,54 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.93;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.73;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,54 +76,53 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-float hash12(float2 p)
+float luma3(float3 color)
 {
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    return dot(color, float3(0.299, 0.587, 0.114));
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
+    float alpha = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        alpha = 1.0;
     }
-    return a * saturate(opacity);
+    return alpha * saturate(opacity);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
-    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
-    float gray = luma3(color.rgb);
-    float3 curse = float3(0.080, 0.020, 0.120);
-    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
-    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
-    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
-    out_rgb.r += pulse * 0.10 * intensity;
-    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float radius = length(from_center);
+
+    // Wrap so a long stream does not quantize the pulse phase.
+    float wrapped_time = fmod(elapsed_time * speed, 1024.0);
+    float pulse = 0.5 + 0.5 * sin(wrapped_time * 1.4);
+    float luma = luma3(color.rgb);
+    float shadow_reach = max(0.12, 0.22 + 0.20 * amount);
+    float source_shadow = 1.0 - smoothstep(0.02, shadow_reach, luma);
+    float edge_vignette = smoothstep(0.32, 1.05, radius);
+    float edge_band = saturate(1.0 - abs(luma - shadow_reach * 0.5) / max(shadow_reach, 0.001));
+    float edge_wobble = sin(uv.y * 17.0 + wrapped_time * 1.1) * sin(uv.x * 9.0 - wrapped_time * 0.8);
+    float haunt = saturate(max(source_shadow, edge_vignette * 0.85) + edge_wobble * edge_band * 0.18 * amount);
+    haunt *= 0.55 + 0.45 * pulse;
+
+    float crush = lerp(1.0, 0.62, saturate(haunt * intensity * 0.55));
+    float3 shadowed = color.rgb * crush;
+    float3 green_cast = shadowed * float3(0.45, 1.25, 0.50) + float3(0.02, 0.06, 0.02) * haunt;
+    float green_weight = saturate(haunt * intensity * 0.70);
+    float3 haunted = lerp(shadowed, green_cast, green_weight);
+    return float4(saturate(haunted), alphaOut(color.a));
 }
 
 technique Draw
