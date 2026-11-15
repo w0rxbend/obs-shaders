@@ -3,10 +3,23 @@
 // strength : maximum offset in UV units  (0.0–0.05, default 0.01)
 // falloff  : radius exponent — higher = fringing concentrated near edges (0.0–3.0, default 2.0)
 
-uniform float strength = 0.01;
-uniform float falloff  = 2.0;
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.01;
+uniform float falloff <
+    string label = "Falloff";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 2.0;
 
 uniform texture2d image;
+uniform float2 uv_size;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -21,25 +34,28 @@ struct VertData {
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv  = v_in.uv;
+    float2 uv = v_in.uv;
 
-    // Direction from center
-    float2 center = float2(0.5, 0.5);
-    float2 dir    = uv - center;
-    float  r      = length(dir);
+    // Height-fraction space so the fringe is circular on non-square frames.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(0.5, 0.5);
+    float2 radial = float2(from_center.x * aspect, from_center.y);
+    float radius = length(radial);
 
-    // Weight grows with radius^falloff — no aberration at center
-    float weight  = pow(r * 2.0, falloff);   // r*2 normalises to ~1 at corners
-    float2 offset = normalize(dir + float2(0.00001, 0.0)) * weight * strength;
+    // radius*2 is 1 at the top and bottom midpoints. Center stays unsplit.
+    float weight = pow(max(radius * 2.0, 0.001), falloff);
+    float2 direction = radial / max(radius, 0.001);
+    float2 shift = direction * weight * strength;
+    shift.x /= max(aspect, 0.001);
 
-    // Red shifted outward, Blue shifted inward, Green stays
-    float2 uvR = saturate(uv + offset);
-    float2 uvG = uv;
-    float2 uvB = saturate(uv - offset);
+    // Red outward, blue inward, green on the source pixel.
+    float2 uv_red = saturate(uv + shift);
+    float2 uv_blue = saturate(uv - shift);
 
-    float4 colR = image.Sample(textureSampler, uvR);
-    float4 colG = image.Sample(textureSampler, uvG);
-    float4 colB = image.Sample(textureSampler, uvB);
+    float4 red = image.Sample(textureSampler, uv_red);
+    float4 green = image.Sample(textureSampler, uv);
+    float4 blue = image.Sample(textureSampler, uv_blue);
 
-    return float4(colR.r, colG.g, colB.b, colG.a);
+    float3 rgb = saturate(float3(red.r, green.g, blue.b));
+    return float4(rgb, green.a);
 }
