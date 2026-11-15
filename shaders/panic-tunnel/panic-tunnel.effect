@@ -5,12 +5,26 @@
 // Use case: Tunnel vision with rapid zoom-blur toward center and dark edges closing in
 // Chain order: early; apply before color corrections
 
-uniform float tunnel_strength = 0.65; // 0.0 – 1.0
-uniform float pulse_speed     = 1.2;  // 0.0 – 3.0
+uniform float tunnel_strength <
+    string label = "Tunnel Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float pulse_speed <
+    string label = "Pulse Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.2;
+
 // blur_taps is fixed at 8 as per spec
 
-uniform float     elapsed_time;
-uniform float2    uv_pixel_interval;
+uniform float elapsed_time;
+uniform float2 uv_size;
 uniform texture2d image;
 
 sampler_state textureSampler {
@@ -28,9 +42,10 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Center-relative coords [-1, 1]
+    // Center-relative coords [-1, 1]. Stretch x so the tunnel stays circular.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 centered = uv * 2.0 - 1.0;
-    float  dist     = length(centered);
+    float dist = length(float2(centered.x * aspect, centered.y));
 
     // Pulsing tunnel radius: shrinks on beat, grows between beats
     float beatCycle = sin(elapsed_time * pulse_speed * 6.2832) * 0.5 + 0.5;
@@ -50,25 +65,25 @@ float4 mainImage(VertData v_in) : TARGET
 
     float4 blurred = float4(0.0, 0.0, 0.0, 0.0);
     // 8 fixed taps
-    blurred += image.Sample(textureSampler, uv + dir * 0.125);
-    blurred += image.Sample(textureSampler, uv + dir * 0.25);
-    blurred += image.Sample(textureSampler, uv + dir * 0.375);
-    blurred += image.Sample(textureSampler, uv + dir * 0.5);
-    blurred += image.Sample(textureSampler, uv + dir * 0.625);
-    blurred += image.Sample(textureSampler, uv + dir * 0.75);
-    blurred += image.Sample(textureSampler, uv + dir * 0.875);
-    blurred += image.Sample(textureSampler, uv + dir * 1.0);
-    blurred /= 8.0;
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 0.125));
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 0.25));
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 0.375));
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 0.5));
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 0.625));
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 0.75));
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 0.875));
+    blurred += image.Sample(textureSampler, saturate(uv + dir * 1.0));
+    blurred /= max(8.0, 0.001);
 
     // Original center sample
-    float4 orig = image.Sample(textureSampler, uv);
+    float4 orig = image.Sample(textureSampler, saturate(uv));
 
     // Mix: center stays sharp, edges get zoom-blurred
     float blurMix = saturate(dist * 1.2);
-    float4 col    = lerp(orig, blurred, blurMix * tunnel_strength);
+    float3 rgb    = lerp(orig.rgb, blurred.rgb, blurMix * tunnel_strength);
 
     // Apply dark tunnel vignette
-    col.rgb *= vignette;
+    rgb *= vignette;
 
-    return float4(saturate(col.rgb), col.a);
+    return float4(saturate(rgb), orig.a);
 }
