@@ -1,27 +1,71 @@
 // Filename: shader_070_broken_glass_approximation.effect
 // Category: Lens / distortion pack
 // Effect: Broken glass approximation
-// Visual principle: channel separation, block displacement, horizontal tears, and quantized corruption.
-// What makes it cool: it creates readable digital failure while keeping the source recognizable.
-// Suggested source type: screen capture, game capture, music visuals, alerts
-// Suggested shader-chain combinations: this shader -> RGB split -> digital noise
-// Performance cost: medium
-// Alpha safe: no
-// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// Visual principle: impact cracks from a center, with a small per-shard refraction and a thin bright rim.
+// What makes it cool: the pane looks shattered while a talking head stays in frame and recognizable.
+// Suggested source type: webcam, game capture, image source, video source
+// Suggested shader-chain combinations: this shader -> chromatic aberration -> bloom
+// Performance cost: low
+// Alpha safe: yes
+// Limitations: single-pass radial cracks; no external textures; not a multi-pass voronoi pane.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.85;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,16 +94,31 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
+float sectorSize(float count)
 {
-    return dot(c, float3(0.299, 0.587, 0.114));
+    return 6.2831853 / max(count, 0.001);
 }
 
-float2 rotate2d(float2 p, float a)
+float crackedAngle(float ang, float radius, float count, float salt)
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float sector = sectorSize(count);
+    float ring = floor(radius * (4.0 + amount * 6.0));
+    float rough = floor((ang + 3.14159265) / max(sector, 0.001));
+    float kink = (hash12(float2(rough + salt, ring)) - 0.5) * sector * 0.45 * saturate(amount);
+    return ang + kink;
+}
+
+float crackDistance(float ang, float radius, float count)
+{
+    float sector = sectorSize(count);
+    float along = abs(frac((ang + 3.14159265) / max(sector, 0.001)) - 0.5) * sector;
+    return radius * sin(min(along, 1.5707963));
+}
+
+float shardId(float ang, float count)
+{
+    float sector = sectorSize(count);
+    return floor((ang + 3.14159265) / max(sector, 0.001));
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,30 +127,76 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float row = floor(uv.y * (24.0 + amount * 28.0));
-    float gate = step(0.68, hash12(float2(row, floor(t * 8.0))));
-    float shift = (hash12(float2(row * 3.1, floor(t * 6.0))) - 0.5) * 0.075 * amount * gate;
-    float block = floor(uv.x * 18.0) + floor(uv.y * 10.0) * 31.0;
-    float block_gate = step(0.78, hash12(float2(block, floor(t * 4.0))));
-    float2 duv = float2(shift + block_gate * 0.025 * sin(t + block), 0.0);
-    float spread = 0.006 * intensity + abs(shift) * 0.25;
-    float rch = image.Sample(textureSampler, clamp(uv + duv + float2(spread, 0.0), 0.0, 1.0)).r;
-    float gch = image.Sample(textureSampler, clamp(uv + duv, 0.0, 1.0)).g;
-    float bch = image.Sample(textureSampler, clamp(uv + duv - float2(spread, 0.0), 0.0, 1.0)).b;
-    float3 accent = float3(1.000, 0.000, 0.550);
-    float3 out_rgb = lerp(float3(rch, gch, bch), accent, gate * 0.12 * intensity);
-    out_rgb += (hash12(floor(uv * uv_size / 2.0) + floor(t * 22.0)) - 0.5) * 0.07 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 base = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 center = float2(center_x, center_y);
+    float2 from_center = uv - center;
+    from_center.x *= aspect;
+    float radius = length(from_center);
+    float ang = atan2(from_center.y, from_center.x);
+
+    float primary_count = 4.0 + amount * 4.0;
+    float secondary_count = 3.0 + amount * 2.0;
+    float primary_ang = crackedAngle(ang, radius, primary_count, 0.0);
+    float secondary_ang = crackedAngle(ang + 1.17, radius, secondary_count, 11.0);
+    float primary_edge = crackDistance(primary_ang, radius, primary_count);
+    float secondary_edge = crackDistance(secondary_ang, radius, secondary_count);
+    float secondary_fade = smoothstep(0.18, 0.45, radius);
+    secondary_edge = lerp(secondary_edge, 1.0, secondary_fade);
+    float edge = min(primary_edge, secondary_edge);
+
+    float shard = shardId(primary_ang, primary_count);
+    float2 nudge = float2(
+        hash12(float2(shard, 1.7)) - 0.5,
+        hash12(float2(shard, 4.2)) - 0.5);
+    nudge *= 0.014 * intensity;
+    float2 radial = float2(cos(ang) / max(aspect, 0.001), sin(ang));
+    float push = (hash12(float2(shard, 8.4)) - 0.5) * 0.008 * intensity;
+    float2 sample_uv = clamp(uv + nudge + radial * push, 0.0, 1.0);
+
+    float pixel_y = max(uv_pixel_interval.y, 0.001);
+    float width = pixel_y * (2.2 + 1.4 * max(intensity, 0.0));
+    float dist_n = edge / max(width, 0.001);
+    float gap = (1.0 - smoothstep(0.15, 0.55, dist_n)) * saturate(intensity);
+    float rim = smoothstep(0.35, 0.7, dist_n) * (1.0 - smoothstep(0.7, 1.8, dist_n));
+    rim *= saturate(intensity);
+    // Keep the impact point from covering the middle of a face.
+    float reach = smoothstep(0.0, 0.035, radius);
+    gap *= reach;
+    rim *= lerp(0.25, 1.0, reach);
+
+    float near = saturate(1.0 - dist_n / 6.0);
+    float2 perp = float2(-sin(ang) / max(aspect, 0.001), cos(ang));
+    float2 fringe = perp * (0.0025 * intensity * near);
+    float red = image.Sample(textureSampler, clamp(sample_uv + fringe, 0.0, 1.0)).r;
+    float4 pane = image.Sample(textureSampler, sample_uv);
+    float blue = image.Sample(textureSampler, clamp(sample_uv - fringe, 0.0, 1.0)).b;
+    float pane_gain = lerp(1.0, 0.97 + 0.05 * hash12(float2(shard, 6.5)), saturate(intensity));
+    float3 glass = float3(red, pane.g, blue) * pane_gain;
+
+    float clock = fmod(elapsed_time * speed, 1024.0);
+    float glint = 0.7 + 0.3 * sin(radius * 24.0 - clock * 1.25 + shard);
+    float3 spark = float3(0.78, 0.90, 1.0) * glint;
+    glass = lerp(glass, glass * 0.42, saturate(gap));
+    glass = lerp(glass, saturate(glass + spark), saturate(rim));
+
+    float3 effect = glass;
+    [branch]
+    if (intensity > 0.001)
+    {
+        effect = saturate(glass);
+    }
+    float3 shown = lerp(base.rgb, effect, saturate(opacity));
+    return float4(shown, alphaOut(base.a));
 }
 
 technique Draw
