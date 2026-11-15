@@ -1,27 +1,70 @@
 // Filename: shader_056_matrix_terminal_green.effect
 // Category: Cyberpunk / glitch pack
 // Effect: Matrix terminal green
-// Visual principle: channel separation, block displacement, horizontal tears, and quantized corruption.
-// What makes it cool: it creates readable digital failure while keeping the source recognizable.
+// Visual principle: phosphor-green terminal grade, scanlines, and falling matrix rain.
+// What makes it cool: the source reads as a green terminal while a talking head stays recognizable.
 // Suggested source type: screen capture, game capture, music visuals, alerts
 // Suggested shader-chain combinations: this shader -> RGB split -> digital noise
-// Performance cost: medium
+// Performance cost: low
 // Alpha safe: no
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.93;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -53,13 +96,6 @@ float hash12(float2 p)
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -76,22 +112,50 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float row = floor(uv.y * (24.0 + amount * 28.0));
-    float gate = step(0.68, hash12(float2(row, floor(t * 8.0))));
-    float shift = (hash12(float2(row * 3.1, floor(t * 6.0))) - 0.5) * 0.075 * amount * gate;
-    float block = floor(uv.x * 18.0) + floor(uv.y * 10.0) * 31.0;
-    float block_gate = step(0.78, hash12(float2(block, floor(t * 4.0))));
-    float2 duv = float2(shift + block_gate * 0.025 * sin(t + block), 0.0);
-    float spread = 0.006 * intensity + abs(shift) * 0.25;
-    float rch = image.Sample(textureSampler, clamp(uv + duv + float2(spread, 0.0), 0.0, 1.0)).r;
-    float gch = image.Sample(textureSampler, clamp(uv + duv, 0.0, 1.0)).g;
-    float bch = image.Sample(textureSampler, clamp(uv + duv - float2(spread, 0.0), 0.0, 1.0)).b;
-    float3 accent = float3(0.150, 1.000, 0.350);
-    float3 out_rgb = lerp(float3(rch, gch, bch), accent, gate * 0.12 * intensity);
-    out_rgb += (hash12(floor(uv * uv_size / 2.0) + floor(t * 22.0)) - 0.5) * 0.07 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float4 color = image.Sample(textureSampler, clamp(uv, 0.0, 1.0));
+    float luma = luma3(color.rgb);
+
+    float steps = 6.0;
+    float quant = floor(luma * steps) / max(steps - 1.0, 0.001);
+    float tone = lerp(luma, quant, saturate(amount * 0.30));
+    float3 phosphor = float3(0.10, 0.92, 0.22);
+    float3 green = phosphor * (0.12 + 0.95 * tone);
+    float3 graded = lerp(color.rgb, green, saturate(intensity * 0.70));
+
+    // Rain thins near the subject so a centered talking head stays readable.
+    float aspect = max(uv_size.x / max(uv_size.y, 1.0), 0.001);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float edge_w = smoothstep(0.10, 0.85, length(from_center));
+
+    float scan = lerp(0.80, 1.0, frac(uv.y * max(uv_size.y, 1.0) * 0.5));
+    graded *= lerp(1.0, scan, saturate(amount * 0.45));
+
+    float cols = 18.0 + 28.0 * saturate(amount);
+    float rows = cols / aspect;
+    float col = floor(uv.x * cols);
+    float col_h = hash12(float2(col, 2.71));
+    float clock = fmod(max(elapsed_time, 0.0), 4096.0);
+    float head = frac(col_h * 8.0 + clock * speed * (0.45 + col_h * 0.90));
+    float behind = frac(head - uv.y);
+    float trail = saturate(1.0 - behind * (2.4 + col_h * 2.2));
+
+    float2 cell = float2(col, floor(uv.y * rows));
+    float2 cell_uv = frac(float2(uv.x * cols, uv.y * rows));
+    float glyph_tick = floor(clock * (0.8 + speed));
+    float glyph_h = hash12(cell + float2(glyph_tick, col_h * 13.0));
+    float inside = step(0.15, cell_uv.x) * step(cell_uv.x, 0.85);
+    inside *= step(0.08, cell_uv.y) * step(cell_uv.y, 0.92);
+    float bits = step(0.45, frac(cell_uv.x * 3.0 + glyph_h * 2.0));
+    bits *= step(0.40, frac(cell_uv.y * 5.0 + glyph_h));
+    float glyph = inside * bits * step(0.28, glyph_h);
+
+    float rain_gain = saturate(amount * 0.50) * saturate(intensity) * lerp(0.40, 1.0, edge_w);
+    graded += float3(0.05, 0.55, 0.12) * trail * rain_gain;
+    graded += float3(0.45, 1.0, 0.55) * glyph * trail * rain_gain;
+    graded += float3(0.70, 1.0, 0.75) * smoothstep(0.06, 0.0, behind) * glyph * rain_gain;
+
+    return float4(saturate(graded), alphaOut(color.a));
 }
 
 technique Draw
