@@ -7,11 +7,33 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
+uniform float2   uv_offset;
+uniform float2   uv_scale;
 uniform float2   uv_pixel_interval;
 
-uniform float glow_strength  = 0.8;  // 0.0–2.0
-uniform float pastel_amount  = 0.5;  // 0.0–1.0
-uniform float chroma_offset  = 0.005; // 0.0–0.01
+uniform float glow_strength <
+    string label = "Glow Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.8;
+
+uniform float pastel_amount <
+    string label = "Pastel Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float chroma_offset <
+    string label = "Chroma Offset";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.01;
+    float step = 0.001;
+> = 0.005;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -28,7 +50,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -52,10 +74,7 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Chromatic halo: sample R/B channels offset
-    float2 offsetR = float2( chroma_offset,  chroma_offset) / uv_pixel_interval;
-    float2 offsetB = float2(-chroma_offset, -chroma_offset) / uv_pixel_interval;
-    // Use pixel-space offsets clamped relative to image
+    // Chromatic halo stays in UV. Clamp address mode holds the frame edge.
     float2 pxOff = float2(chroma_offset, chroma_offset);
     float4 srcR  = image.Sample(textureSampler, uv + pxOff);
     float4 srcG  = image.Sample(textureSampler, uv);
