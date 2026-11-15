@@ -1,6 +1,6 @@
 // Performance: medium
 // Webcam safe: yes
-// Preserves alpha: no
+// Preserves alpha: yes
 // Use case: Blue hologram with random signal cutouts, color bands, and partial horizontal desync
 // Chain order: Apply after basic color correction; stack before chromatic-aberration for extra glitch feel
 
@@ -8,10 +8,40 @@ uniform float4x4 ViewProj;
 uniform texture2d image;
 
 uniform float elapsed_time;
-uniform float flicker_rate    = 12.0; // 1.0–30.0
-uniform float band_count      = 8.0;  // 2.0–20.0
-uniform float blue_strength   = 0.8;  // 0.0–1.0
-uniform float dropout_chance  = 0.15; // 0.0–0.5
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float flicker_rate <
+    string label = "Flicker Rate";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 30.0;
+    float step = 0.1;
+> = 12.0;
+
+uniform float band_count <
+    string label = "Band Count";
+    string widget_type = "slider";
+    float minimum = 2.0;
+    float maximum = 20.0;
+    float step = 1.0;
+> = 8.0;
+
+uniform float blue_strength <
+    string label = "Blue Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.8;
+
+uniform float dropout_chance <
+    string label = "Dropout Chance";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.15;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -28,7 +58,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -102,7 +132,7 @@ float4 mainImage(VertData v_in) : TARGET
     // --- Dropout ---
     if (dropped) col = float3(0.0, 0.0, 0.0);
 
-    return float4(col, src.a);
+    return float4(saturate(col), src.a);
 }
 
 technique Draw
