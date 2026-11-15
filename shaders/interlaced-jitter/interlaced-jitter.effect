@@ -6,9 +6,28 @@
 // Chain order: apply before scanlines, after color effects
 
 uniform float4x4 ViewProj;
-uniform float field_strength = 0.006; // 0.0 – 0.02   horizontal field offset
-uniform bool  blend_rows     = true;  // blend neighboring field rows
-uniform float jitter_speed   = 4.0;   // 1.0 – 10.0   animation speed
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+// 0.0 – 0.02 horizontal field offset
+uniform float field_strength <
+    string label = "Field Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.02;
+    float step = 0.001;
+> = 0.006;
+
+uniform bool blend_rows = true;
+
+// 1.0 – 10.0 animation speed
+uniform float jitter_speed <
+    string label = "Jitter Speed";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 10.0;
+    float step = 0.01;
+> = 4.0;
 
 uniform texture2d image;
 uniform float elapsed_time;
@@ -25,18 +44,12 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float Hash11(float x)
-{
-    return frac(sin(x * 127.1) * 43758.5453);
 }
 
 float Hash21(float2 p)
@@ -46,26 +59,22 @@ float Hash21(float2 p)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv   = v_in.uv;
-    float  t    = elapsed_time * jitter_speed;
+    float2 uv = v_in.uv;
+    float t = elapsed_time * jitter_speed;
 
-    // Determine field — interlaced video alternates odd/even fields each frame
-    float lineF  = uv.y / uv_pixel_interval.y;
+    // Odd and even fields alternate by scanline. Clamp the step so a zero interval cannot explode the line id.
+    float lineF = uv.y / max(uv_pixel_interval.y, 0.001);
     float lineId = floor(lineF);
-    float isOdd  = fmod(lineId, 2.0); // 0 even, 1 odd
+    float isOdd = fmod(lineId, 2.0);
 
-    // Field-level jitter: generate per-frame, per-field-row shift
-    // Use a slow-changing time floor to simulate frame-based field updates
     float frameSeed = floor(t * 0.5);
     float fieldSeed = Hash21(float2(lineId * 0.1, frameSeed));
 
-    // Odd rows get horizontal jitter
     float shift = 0.0;
     if (isOdd > 0.5)
     {
-        // Non-uniform: most rows are still, occasional burst rows shift hard
         float burstRow = Hash21(float2(lineId * 3.7, floor(t * 0.25)));
-        float burstAmt = step(0.85, burstRow); // ~15% of rows burst
+        float burstAmt = step(0.85, burstRow);
         shift = (fieldSeed - 0.5) * 2.0 * field_strength;
         shift *= (1.0 + burstAmt * 4.0);
     }
@@ -73,13 +82,12 @@ float4 mainImage(VertData v_in) : TARGET
     float2 shiftedUv = float2(saturate(uv.x + shift), uv.y);
     float4 col = image.Sample(textureSampler, shiftedUv);
 
-    // Blend artifact: mix current line with the one above (ghosting between fields)
+    // Ghost the line above into odd fields so the comb reads as interlace, not a hard tear.
     if (blend_rows && isOdd > 0.5)
     {
         float2 aboveUv = float2(uv.x, saturate(uv.y - uv_pixel_interval.y));
-        float4 above   = image.Sample(textureSampler, aboveUv);
-        // Slight luminance smear — classic interlace combing
-        float blendAmt = abs(shift) / (field_strength + 0.0001);
+        float4 above = image.Sample(textureSampler, aboveUv);
+        float blendAmt = abs(shift) / max(field_strength, 0.001);
         blendAmt = saturate(blendAmt * 0.5);
         col.rgb = lerp(col.rgb, (col.rgb + above.rgb) * 0.5, blendAmt);
     }
