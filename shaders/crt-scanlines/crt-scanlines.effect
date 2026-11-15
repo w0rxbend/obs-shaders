@@ -1,12 +1,31 @@
 // C9 — crt-scanlines
 // CRT monitor effect: scanlines, barrel curvature, phosphor RGB mask.
 
-uniform float line_width  = 1.0;  // 0.5 – 2.0
-uniform float darkness    = 0.4;  // 0.0 – 1.0
-uniform float curvature   = 0.1;  // 0.0 – 0.3
-uniform bool  rgb_mask    = true;
+uniform float line_width <
+    string label = "Line width";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
+uniform float darkness <
+    string label = "Darkness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+uniform float curvature <
+    string label = "Curvature";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.1;
+uniform bool rgb_mask = true;
 
 uniform texture2d image;
+uniform float2 uv_size;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -19,60 +38,54 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-// Barrel / pincushion distortion
+// Barrel in pixel aspect so the tube stays round on wide frames.
 float2 CRTCurve(float2 uv, float amount)
 {
-    float2 cc = uv - 0.5;
-    float  dist = dot(cc, cc);
-    // Warp outward proportionally to distance from centre
-    uv = uv + cc * dist * amount;
-    return uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 p = uv - 0.5;
+    p.x *= aspect;
+    float dist = dot(p, p);
+    p = p + p * dist * amount;
+    p.x /= max(aspect, 0.001);
+    return p + 0.5;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Apply barrel curvature
+    // 4 maps the 0–0.3 slider onto the barrel polynomial.
     uv = CRTCurve(uv, curvature * 4.0);
-
-    // Pixels outside the curved screen become black
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
-        return float4(0.0, 0.0, 0.0, 1.0);
 
     float4 col = image.Sample(textureSampler, uv);
 
-    // Scanline mask — one dark line per pair of screen pixels
-    // line_width controls how many texture-space units per scanline pair
-    // Assume ~1080 lines in the source; scanline period in uv = 2 / 1080
-    float  lineFreq  = 1080.0 / (line_width * 2.0);
-    float  scanPos   = frac(uv.y * lineFreq);
-    // Smooth dark gap at the top portion of each scanline pair
-    float  scanMask  = smoothstep(0.0, 0.25, scanPos) * (1.0 - smoothstep(0.50, 0.75, scanPos));
-    // scanMask: 1 inside bright stripe, 0 in dark gap
-    float  scanDark  = lerp(1.0, scanMask, darkness);
+    // Outside the tube is black. Keep the clamped edge sample's alpha.
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
+        return float4(0.0, 0.0, 0.0, col.a);
+
+    // One dark gap per line_width * 2 source rows.
+    float lineFreq = max(uv_size.y, 1.0) / max(line_width * 2.0, 0.001);
+    float scanPos = frac(uv.y * lineFreq);
+    float scanMask = smoothstep(0.0, 0.25, scanPos) * (1.0 - smoothstep(0.50, 0.75, scanPos));
+    float scanDark = lerp(1.0, scanMask, darkness);
     col.rgb *= scanDark;
 
-    // Phosphor RGB sub-pixel mask — every 3 horizontal pixels cycles R,G,B
     if (rgb_mask)
     {
-        float  pixX   = frac(uv.x * 1920.0 / 3.0); // 3 sub-pixels per phosphor dot
-        // Which sub-pixel column (0,1,2) → R,G,B
-        float  subPix = floor(uv.x * 1920.0) - floor(uv.x * 1920.0 / 3.0) * 3.0;
+        float pixelX = floor(uv.x * max(uv_size.x, 1.0));
+        float subPix = pixelX - floor(pixelX / max(3.0, 0.001)) * 3.0;
 
         float3 mask;
-        mask.r = step(abs(subPix - 0.0), 0.5); // column 0 → boost R
-        mask.g = step(abs(subPix - 1.0), 0.5); // column 1 → boost G
-        mask.b = step(abs(subPix - 2.0), 0.5); // column 2 → boost B
+        mask.r = step(abs(subPix - 0.0), 0.5);
+        mask.g = step(abs(subPix - 1.0), 0.5);
+        mask.b = step(abs(subPix - 2.0), 0.5);
 
-        // Blend: mostly original + faint phosphor tint
         col.rgb = col.rgb * lerp(float3(1.0, 1.0, 1.0), mask * 1.5, 0.25);
     }
 
-    // Edge vignette to simulate CRT bezel shadow
-    float2 vignUv  = uv - 0.5;
-    float  vignDist = dot(vignUv, vignUv);
-    float  vign     = 1.0 - smoothstep(0.18, 0.55, vignDist * 3.5);
+    float2 vignUv = uv - 0.5;
+    float vignDist = dot(vignUv, vignUv);
+    float vign = 1.0 - smoothstep(0.18, 0.55, vignDist * 3.5);
     col.rgb *= lerp(1.0, vign, 0.35);
 
     return float4(saturate(col.rgb), col.a);
