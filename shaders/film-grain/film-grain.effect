@@ -1,12 +1,27 @@
 // C5 — film-grain
 // Animated film grain overlay, optionally colored.
 
-uniform float strength = 0.12; // 0.0 – 0.5
-uniform float size     = 1.0;  // 0.5 – 4.0
-uniform bool  colored  = false;
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.12;
+
+uniform float size <
+    string label = "Size";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform bool colored = false;
 
 uniform texture2d image;
 uniform float elapsed_time;
+uniform float2 uv_size;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -24,12 +39,12 @@ float Hash21(float2 p)
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
 }
 
-// 2-tap smoothed grain using bilinear trick
+// Square cells in source pixels. size is the clump size in pixels.
 float Grain(float2 uv, float seed)
 {
-    // Scale UV by reciprocal of size so larger size = larger grain clumps
-    float2 scaled = uv / max(size, 0.01);
-    // Pixel grid
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float cellsY = max(uv_size.y, 1.0) / max(size, 0.001);
+    float2 scaled = uv * float2(cellsY * aspect, cellsY);
     float2 i = floor(scaled);
     float2 f = frac(scaled);
 
@@ -38,31 +53,28 @@ float Grain(float2 uv, float seed)
     float c = Hash21(i + float2(seed, 1.0));
     float d = Hash21(i + float2(1.0 + seed, 1.0));
 
-    // Smooth interpolation
     float2 u = f * f * (3.0 - 2.0 * f);
     return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv  = v_in.uv;
+    float2 uv = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    // Pixel-level UV (assuming ~1920x1080 equivalent grain density)
-    float2 pixUv   = uv * float2(1920.0, 1080.0);
-    float  seed    = floor(elapsed_time * 24.0);   // refresh at 24 fps
+    // Film cadence. Strength 0.12 stays a texture, not a frame flash.
+    float seed = floor(elapsed_time * 24.0);
 
     if (colored)
     {
-        // Independent noise per channel for color grain
-        float gr = Grain(pixUv, seed)                * 2.0 - 1.0;
-        float gg = Grain(pixUv, seed + 37.1)         * 2.0 - 1.0;
-        float gb = Grain(pixUv, seed + 91.3)         * 2.0 - 1.0;
+        float gr = Grain(uv, seed) * 2.0 - 1.0;
+        float gg = Grain(uv, seed + 37.1) * 2.0 - 1.0;
+        float gb = Grain(uv, seed + 91.3) * 2.0 - 1.0;
         col.rgb = saturate(col.rgb + float3(gr, gg, gb) * strength);
     }
     else
     {
-        float g = Grain(pixUv, seed) * 2.0 - 1.0;
+        float g = Grain(uv, seed) * 2.0 - 1.0;
         col.rgb = saturate(col.rgb + float3(g, g, g) * strength);
     }
 
