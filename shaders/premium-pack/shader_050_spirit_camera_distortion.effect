@@ -1,8 +1,8 @@
 // Filename: shader_050_spirit_camera_distortion.effect
 // Category: Horror / supernatural pack
 // Effect: Spirit camera distortion
-// Visual principle: crushed shadows, color-biased darkness, pulse timing, and unstable edges.
-// What makes it cool: it adds dread by making the frame feel reactive and contaminated.
+// Visual principle: slow barrel breathe, unstable edge wobble, RGB fringe, crushed violet shadows, and sensor grain.
+// What makes it cool: a live plate reads as a cheap full-spectrum spirit camera while a talking head stays recognizable.
 // Suggested source type: webcam, horror games, video source, dramatic scenes
 // Suggested shader-chain combinations: this shader -> ghost double image -> dark vignette
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.85;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.83;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -53,13 +96,6 @@ float hash12(float2 p)
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -76,17 +112,53 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
-    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
-    float gray = luma3(color.rgb);
-    float3 curse = float3(0.080, 0.020, 0.120);
-    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
-    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
-    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
-    out_rgb.r += pulse * 0.10 * intensity;
-    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    // UV x is wider than y, so the spirit lens stays round.
+    float aspect = max(uv_size.x / max(uv_size.y, 1.0), 0.001);
+    float2 center = float2(center_x, center_y);
+    float2 from = uv - center;
+    from.x *= aspect;
+    float radius = length(from);
+
+    float wrapped = fmod(elapsed_time * speed, 1024.0);
+    float pulse = 0.5 + 0.5 * sin(wrapped * 1.5);
+    float breathe = 0.70 + 0.30 * pulse;
+    float warp = 0.22 * intensity * amount * breathe;
+    // Floor stops a maxed slider from flipping the lens inside out.
+    float lens = max(1.0 - warp * radius * radius, 0.35);
+
+    float edge = smoothstep(0.32, 1.15, radius);
+    float wobble_x = sin(from.y * 18.0 + wrapped * 2.2);
+    float wobble_y = sin(from.x * 13.0 - wrapped * 1.6);
+    float2 bent = from * lens + float2(wobble_x, wobble_y) * edge * 0.014 * amount;
+
+    float fringe = 0.02 * intensity * breathe;
+    float2 red_from = bent * (1.0 + fringe);
+    float2 blue_from = bent * (1.0 - fringe);
+    float2 green_uv = clamp(center + float2(bent.x / aspect, bent.y), 0.0, 1.0);
+    float2 red_uv = clamp(center + float2(red_from.x / aspect, red_from.y), 0.0, 1.0);
+    float2 blue_uv = clamp(center + float2(blue_from.x / aspect, blue_from.y), 0.0, 1.0);
+
+    float4 green_sample = image.Sample(textureSampler, green_uv);
+    float3 rgb = float3(
+        image.Sample(textureSampler, red_uv).r,
+        green_sample.g,
+        image.Sample(textureSampler, blue_uv).b);
+
+    float luma = luma3(rgb);
+    float shadow = 1.0 - smoothstep(0.0, 0.42, luma);
+    float crush = lerp(1.0, 0.55, shadow * saturate(intensity * 0.55));
+    rgb *= crush;
+
+    float3 spirit = rgb * float3(0.78, 0.72, 1.22) + float3(0.03, 0.0, 0.05) * shadow;
+    rgb = lerp(rgb, spirit, saturate(0.34 * intensity));
+
+    float edge_falloff = smoothstep(0.62, 1.35, radius);
+    rgb *= lerp(1.0, 0.62, edge_falloff * saturate(0.65 * intensity));
+
+    float grain = hash12(floor(uv * uv_size * 0.25) + floor(wrapped * 8.0)) - 0.5;
+    rgb += grain * 0.04 * amount;
+
+    return float4(saturate(rgb), alphaOut(green_sample.a));
 }
 
 technique Draw
