@@ -1,27 +1,70 @@
 // Filename: shader_032_silent_movie_projector.effect
 // Category: Retro analog pack
 // Effect: Silent movie projector
-// Visual principle: scanlines, field jitter, chroma drift, and time-varying tape damage.
+// Visual principle: silver nitrate grade, lamp flicker under 3 Hz, gate weave, dust, and a projector vignette.
 // What makes it cool: it sells nostalgic hardware instability with cheap procedural math.
 // Suggested source type: game capture, retro scenes, video source, screen capture
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> vignette
-// Performance cost: medium
+// Performance cost: low
 // Alpha safe: no
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.01;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.37;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,13 +98,6 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
@@ -75,25 +111,51 @@ float alphaOut(float sampled_alpha)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
     float t = elapsed_time * speed;
-    float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
-    float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
-    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
-    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
-    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
-    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
-    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
-    float rch = image.Sample(textureSampler, uv_r).r;
-    float gch = image.Sample(textureSampler, uv_g).g;
-    float bch = image.Sample(textureSampler, uv_b).b;
-    float noise = hash12(floor(uv * uv_size / 3.0) + floor(t * 20.0)) - 0.5;
-    float3 tint = float3(0.900, 0.200, 0.180);
-    float3 out_rgb = float3(rch, gch, bch) * scan;
-    out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
-    out_rgb += noise * 0.08 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    // 2*speed keeps the default lamp step at 2.74 Hz, under a 3 Hz full-frame flash.
+    float frame = floor(t * 2.0);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float weave_x = (hash12(float2(frame, 1.7)) - 0.5) * 0.008 * amount;
+    float weave_y = (hash12(float2(frame, 4.2)) - 0.5) * 0.006 * amount;
+    float slip = (hash12(float2(floor(t * 0.35), 9.1)) - 0.5) * 0.008 * amount;
+    float2 uv = clamp(v_in.uv + float2(weave_x, weave_y + slip), 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float luma = luma3(source.rgb);
+    float contrast = 1.0 + 0.22 * amount;
+    float graded = saturate((luma - 0.5) * contrast + 0.5);
+    float3 shadow = float3(0.08, 0.07, 0.06);
+    float3 paper = float3(0.96, 0.93, 0.84);
+    float3 silver = lerp(shadow, paper, graded);
+
+    float lamp = 0.94 + 0.06 * hash12(float2(frame, 2.4));
+    lamp *= 1.0 + 0.02 * intensity * sin(t * 2.1);
+    silver *= lamp;
+
+    float grain = hash12(floor(uv * uv_size) + float2(frame, 0.37)) - 0.5;
+    silver += grain * 0.04 * intensity;
+
+    float2 cell = floor(uv * float2(96.0, 54.0));
+    float2 local = frac(uv * float2(96.0, 54.0));
+    float dust_seed = hash12(cell + float2(frame, 3.0));
+    float2 speck_at = float2(hash12(cell + 1.3), hash12(cell + 7.7));
+    float speck = 1.0 - smoothstep(0.0, 0.16, length(local - speck_at));
+    float dust = step(0.994, dust_seed) * speck;
+
+    float column = floor(uv.x * aspect * 240.0);
+    float scratch_seed = hash12(float2(column, floor(t * 0.4)));
+    float hair = 1.0 - smoothstep(0.0, 0.35, abs(frac(uv.x * aspect * 240.0) - 0.5));
+    float band = step(0.72, frac(uv.y * 2.0 + scratch_seed * 5.0));
+    float scratch = step(0.997, scratch_seed) * hair * band;
+    silver += (dust * 0.45 + scratch * 0.28) * intensity;
+
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float vig = 1.0 - smoothstep(0.55, 1.35, length(from_center)) * 0.42 * saturate(amount);
+    silver *= vig;
+
+    float3 out_rgb = lerp(source.rgb, saturate(silver), saturate(intensity));
+    return float4(saturate(out_rgb), alphaOut(source.a));
 }
 
 technique Draw
