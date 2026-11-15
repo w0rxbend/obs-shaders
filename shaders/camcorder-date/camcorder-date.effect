@@ -6,16 +6,54 @@
 // Chain order: apply last in chain, after all scene effects
 
 uniform float4x4 ViewProj;
-uniform float rec_x      = 0.05;  // 0.0 – 1.0    REC dot horizontal position (UV)
-uniform float rec_y      = 0.05;  // 0.0 – 1.0    REC dot vertical position (UV)
-uniform float rec_size   = 0.012; // 0.005 – 0.03 REC dot radius in UV space
-uniform float scanlines  = 0.25;  // 0.0 – 1.0    scanline darkness
-uniform float warmth     = 0.15;  // 0.0 – 0.4    warm color push
-uniform float blink_speed = 1.5;  // 0.5 – 4.0    REC blink rate
-
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
+
+uniform float rec_x <
+    string label = "REC X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.05;
+uniform float rec_y <
+    string label = "REC Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.05;
+uniform float rec_size <
+    string label = "REC size";
+    string widget_type = "slider";
+    float minimum = 0.005;
+    float maximum = 0.03;
+    float step = 0.001;
+> = 0.012;
+uniform float scanlines <
+    string label = "Scanlines";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.25;
+uniform float warmth <
+    string label = "Warmth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.4;
+    float step = 0.01;
+> = 0.15;
+uniform float blink_speed <
+    string label = "Blink speed";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.5;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -28,12 +66,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -46,8 +83,7 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Aspect correction for circular REC dot (assume 16:9)
-    float aspect = 16.0 / 9.0;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
 
     float4 col = image.Sample(textureSampler, uv);
 
@@ -57,15 +93,15 @@ float4 mainImage(VertData v_in) : TARGET
     col.b = saturate(col.b - warmth * 0.25);
 
     // --- Scanlines ---
-    float lineF    = uv.y / uv_pixel_interval.y;
+    float lineF    = uv.y * uv_size.y;
     float scanPos  = frac(lineF * 0.5);
     float scanMask = smoothstep(0.0, 0.3, scanPos) * (1.0 - smoothstep(0.5, 0.8, scanPos));
     float scanDark = lerp(1.0, scanMask, scanlines);
     col.rgb *= scanDark;
 
     // --- Slight video noise ---
-    float noise = Hash21(float2(floor(uv.x / uv_pixel_interval.x), floor(uv.y / uv_pixel_interval.y))
-                  + float2(floor(elapsed_time * 24.0), 0.0));
+    float2 pixel = floor(uv * uv_size);
+    float noise = Hash21(pixel + float2(floor(elapsed_time * 24.0), 0.0));
     col.rgb = saturate(col.rgb + (noise - 0.5) * 0.04);
 
     // --- Date bar (lower-right corner) ---
@@ -78,8 +114,8 @@ float4 mainImage(VertData v_in) : TARGET
     // Simulate 7-segment digit columns with coarse block pattern
     if (inBar > 0.5)
     {
-        float barUvY = (uv.y - (1.0 - barH)) / barH;
-        float barUvX = uv.x / 0.55;
+        float barUvY = (uv.y - (1.0 - barH)) / max(barH, 0.001);
+        float barUvX = uv.x / max(0.55, 0.001);
         float digitCol = floor(barUvX * 14.0);  // 14 character columns
         float digitRow = floor(barUvY * 7.0);   // 7 pixel rows
         float digitRand = Hash21(float2(digitCol, digitRow));
