@@ -1,8 +1,8 @@
 // Filename: shader_061_fisheye.effect
 // Category: Lens / distortion pack
 // Effect: Fisheye
-// Visual principle: radial or directional UV warping with small compensating zoom.
-// What makes it cool: it bends the camera feed like a lens or energy field while preserving the source.
+// Visual principle: aspect-correct polynomial fisheye; the rim bows more than the face.
+// What makes it cool: a round lens bulge bends the room while a talking head stays centered.
 // Suggested source type: webcam, game capture, image source, video source
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> bloom
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.93;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +82,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -76,17 +100,25 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
+    // Width is not height, so the bulge stays round instead of oval.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 center = float2(center_x, center_y);
-    float2 p = uv - center;
-    float t = elapsed_time * speed;
-    float radius = length(p);
-    float wave = sin(radius * 19.0 - t * 3.0) * 0.025 * amount * intensity;
-    float bend = dot(p, p) * (0.22 + 1.0 * 0.025) * amount;
-    float2 dir = normalize(p + float2(0.0001, 0.0002));
-    float2 uv = center + p / (1.04 + abs(wave) + bend * 0.2) + dir * wave + p * bend;
-    float4 warped = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 from_center = uv - center;
+    from_center.x *= aspect;
+
+    // Wrap a long stream so the lens breathe does not lose precision.
+    float clock = fmod(elapsed_time * speed, 1024.0);
+    float breathe = 1.0 + 0.05 * sin(clock);
+    // Gain keeps the written slider defaults a visible bulge that still holds a face.
+    float curve = 0.55 * intensity * amount * breathe;
+    float radius2 = dot(from_center, from_center);
+    float lens = 1.0 / max(1.0 + curve * radius2, 0.001);
+
+    from_center *= lens;
+    from_center.x /= max(aspect, 0.001);
+    float2 sample_uv = clamp(center + from_center, 0.0, 1.0);
+    float4 warped = image.Sample(textureSampler, sample_uv);
+    return float4(warped.rgb, alphaOut(warped.a));
 }
 
 technique Draw
