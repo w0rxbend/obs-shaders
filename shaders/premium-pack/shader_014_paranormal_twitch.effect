@@ -13,15 +13,58 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.17;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -48,11 +91,6 @@ float hash12(float2 p)
     float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
 }
 
 float2 rotate2d(float2 p, float a)
@@ -76,16 +114,24 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
+    // Wrap the clock so sine and the hash stay stable on a long stream.
+    float wrapped_time = fmod(elapsed_time * speed, 1024.0);
+    // High power keeps the frame still, then fires one short twitch burst.
+    float burst = pow(saturate(sin(wrapped_time * 2.1) * 0.5 + 0.5), 18.0);
+    float twitch_frame = fmod(floor(wrapped_time * 12.0), 1024.0);
+    float strength = burst * amount * intensity;
+    float2 jump = (float2(hash12(float2(twitch_frame, 2.0)), hash12(float2(twitch_frame, 5.0))) - 0.5) * 0.03 * strength;
+    float roll = (hash12(float2(twitch_frame, 11.0)) - 0.5) * 0.05 * strength;
     float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 1.04) + sin(t * 0.37 + 5.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 14.0), cos(t * 0.73 + 3.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
+    float zoom = 1.04 + length(jump) * 2.5 + abs(roll) * 1.5;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - center) / max(zoom, 0.001);
+    from_center.x *= aspect;
+    from_center = rotate2d(from_center, roll);
+    from_center.x /= max(aspect, 0.001);
+    float2 warped_uv = center + from_center - jump;
     float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    return float4(warped.rgb, alphaOut(warped.a));
 }
 
 technique Draw
