@@ -5,9 +5,32 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float strength   = 0.8;
-uniform float green_shift = 0.4;
-uniform float contrast   = 1.6;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.8;
+
+uniform float green_shift <
+    string label = "Green Shift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.6;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -24,7 +47,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
