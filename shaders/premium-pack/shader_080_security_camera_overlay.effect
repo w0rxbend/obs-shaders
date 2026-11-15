@@ -1,8 +1,8 @@
 // Filename: shader_080_security_camera_overlay.effect
 // Category: Streamer branding pack
 // Effect: Security camera overlay
-// Visual principle: alpha-safe geometric masking, decorative frames, and procedural edge treatment.
-// What makes it cool: it turns a plain source into a branded layout element.
+// Visual principle: cool CCTV grade, scanlines, corner brackets, a slow reticle, a REC dot, and a thin timecode strip.
+// What makes it cool: the shot reads as a live security feed while the subject stays recognizable.
 // Suggested source type: webcam camera source, streamer layouts, browser source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> animated border
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.85;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.19;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,49 +93,101 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
-    if (!preserve_alpha)
+    if (preserve_alpha)
     {
-        a = 1.0;
+        return sampled_alpha;
     }
-    return a * saturate(opacity);
+    return saturate(opacity);
+}
+
+float cornerBracket(float2 rel)
+{
+    float arm = 0.07;
+    float thick = 0.0036;
+    float horizontal = step(0.0, rel.x) * step(rel.x, arm) * step(abs(rel.y), thick);
+    float vertical = step(0.0, rel.y) * step(rel.y, arm) * step(abs(rel.x), thick);
+    return saturate(horizontal + vertical);
+}
+
+float cornerBrackets(float2 uv, float aspect)
+{
+    float ax = (uv.x - 0.5) * aspect;
+    float ay = uv.y - 0.5;
+    float inset = 0.045;
+    float2 half_ext = float2(max(aspect * 0.5 - inset, inset), 0.5 - inset);
+    float mark = 0.0;
+    mark += cornerBracket(float2(ax + half_ext.x, ay + half_ext.y));
+    mark += cornerBracket(float2(-ax + half_ext.x, ay + half_ext.y));
+    mark += cornerBracket(float2(ax + half_ext.x, -ay + half_ext.y));
+    mark += cornerBracket(float2(-ax + half_ext.x, -ay + half_ext.y));
+    return saturate(mark);
+}
+
+float reticleMask(float2 uv, float aspect)
+{
+    float2 from_center = float2((uv.x - center_x) * aspect, uv.y - center_y);
+    float thick = 0.0024;
+    float arm = 0.028;
+    float gap = 0.01;
+    float horizontal = step(abs(from_center.y), thick) * step(gap, abs(from_center.x)) * step(abs(from_center.x), arm);
+    float vertical = step(abs(from_center.x), thick) * step(gap, abs(from_center.y)) * step(abs(from_center.y), arm);
+    return saturate(horizontal + vertical);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 p = uv - float2(center_x, center_y);
-    float jag = hash12(floor(uv * 48.0) + floor(elapsed_time * speed)) - 0.5;
-    float d = length(p) - 0.46;
-    float mask = 1.0 - smoothstep(0.0, 0.018 * amount, d);
-    float border = 1.0 - smoothstep(0.018, 0.055, abs(d));
-    float pulse = 0.55 + 0.45 * sin(elapsed_time * speed * 2.0);
-    float3 frame = float3(1.000, 0.880, 0.580) * (0.75 + 0.45 * pulse);
-    float3 out_rgb = lerp(color.rgb, frame, saturate(border * intensity));
-    float alpha = color.a * mask;
-    [branch]
-    if (!preserve_alpha)
-    {
-        out_rgb = lerp(float3(0.02, 0.025, 0.03), out_rgb, mask);
-        alpha = 1.0;
-    }
-    return float4(saturate(out_rgb), alpha * saturate(opacity));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float drive = intensity / max(1.30, 0.001);
+    float grade = saturate(drive * 0.62);
+    float overlay_strength = saturate(drive);
+    float coverage = saturate(amount);
+
+    float luma = dot(source.rgb, float3(0.299, 0.587, 0.114));
+    float3 cctv = float3(luma, luma, luma) * float3(0.76, 0.96, 0.80);
+    float3 rgb = lerp(source.rgb, cctv, grade);
+
+    float scan = 0.5 + 0.5 * sin(uv.y * max(uv_size.y, 1.0) * 1.5707963);
+    float scan_depth = coverage * 0.22 * overlay_strength;
+    rgb *= lerp(1.0 - scan_depth, 1.0, scan);
+
+    float2 from_middle = float2((uv.x - 0.5) * aspect, uv.y - 0.5);
+    float vignette = smoothstep(0.45, 1.15, length(from_middle));
+    rgb *= lerp(1.0, 0.78, vignette * coverage * 0.55 * overlay_strength);
+
+    // Wrap the phase so a multi-hour recording does not lose float precision.
+    float clock = fmod(elapsed_time * speed, 1024.0);
+    float grain_clock = floor(clock * 8.0);
+    float grain = hash12(float2(floor(uv.x * 180.0), floor(uv.y * 180.0)) + grain_clock);
+    rgb += (grain - 0.5) * 0.05 * coverage * overlay_strength;
+
+    // Speed 1.19 moves the bar at about 0.14 Hz, under the full-frame flash cap.
+    float sweep = frac(clock * 0.12);
+    float sweep_band = 1.0 - smoothstep(0.0, 0.01, abs(uv.y - sweep));
+    rgb += sweep_band * float3(0.03, 0.07, 0.04) * overlay_strength;
+
+    float brackets = cornerBrackets(uv, aspect) * overlay_strength;
+    float reticle = reticleMask(uv, aspect) * overlay_strength;
+    rgb = lerp(rgb, float3(0.62, 0.95, 0.72), saturate(brackets * 0.85));
+    rgb = lerp(rgb, float3(0.70, 1.0, 0.78), saturate(reticle * 0.75));
+
+    float2 rec_delta = float2((uv.x - 0.055) * aspect, uv.y - 0.06);
+    float rec_dot = 1.0 - smoothstep(0.007, 0.011, length(rec_delta));
+    // Speed 1.19 blinks the dot at about 0.38 Hz. It is not a full-frame flash.
+    float blink = step(0.0, sin(clock * 2.0));
+    rgb = lerp(rgb, float3(0.95, 0.12, 0.10), rec_dot * blink * overlay_strength);
+
+    float band = smoothstep(0.958, 0.968, uv.y);
+    float tick = step(0.62, hash12(float2(floor(uv.x * 42.0), floor(clock))));
+    float3 tick_rgb = lerp(float3(0.04, 0.06, 0.045), float3(0.45, 0.90, 0.55), tick);
+    rgb = lerp(rgb, tick_rgb, band * 0.55 * coverage * overlay_strength);
+
+    float3 shown = lerp(source.rgb, saturate(rgb), saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
