@@ -1,27 +1,71 @@
 // Filename: shader_037_pal_phase_shift.effect
 // Category: Retro analog pack
 // Effect: PAL phase shift
-// Visual principle: scanlines, field jitter, chroma drift, and time-varying tape damage.
+// Visual principle: alternate-line chroma phase (Hanover bars) and a slow phase swing, with luma held on the source.
 // What makes it cool: it sells nostalgic hardware instability with cheap procedural math.
 // Suggested source type: game capture, retro scenes, video source, screen capture
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> vignette
-// Performance cost: medium
-// Alpha safe: no
+// Performance cost: low
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.01;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,15 +83,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
 }
 
 float luma3(float3 c)
@@ -64,36 +101,49 @@ float2 rotate2d(float2 p, float a)
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
-    if (!preserve_alpha)
+    if (preserve_alpha)
     {
-        a = 1.0;
+        return sampled_alpha;
     }
-    return a * saturate(opacity);
+    return saturate(sampled_alpha);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, float2(0.0, 0.0), float2(1.0, 1.0));
     float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
-    float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
-    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
-    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
-    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
-    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
-    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
-    float rch = image.Sample(textureSampler, uv_r).r;
-    float gch = image.Sample(textureSampler, uv_g).g;
-    float bch = image.Sample(textureSampler, uv_b).b;
-    float noise = hash12(floor(uv * uv_size / 3.0) + floor(t * 20.0)) - 0.5;
-    float3 tint = float3(0.550, 0.700, 0.950);
-    float3 out_rgb = float3(rch, gch, bch) * scan;
-    out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
-    out_rgb += noise * 0.08 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+
+    // 0.55 rad/s * speed. Default speed 1.01 swings hue at 0.09 Hz, under a 3 Hz flash.
+    float cycle = elapsed_time * speed * 0.55 * 0.15915494;
+    float wrapped = (cycle - floor(cycle)) * 6.2831853;
+    float swing = sin(wrapped);
+
+    float rows = max(uv_size.y, 1.0);
+    float line = floor(uv.y * rows + (center_y - 0.5) * 4.0);
+    float odd = step(0.5, frac(line * 0.5));
+    float phase_sign = odd * 2.0 - 1.0;
+
+    float phase_amt = max(amount, 0.0);
+    float gain = max(intensity, 0.0);
+    float theta = phase_sign * (0.32 + 0.16 * swing) * phase_amt * gain;
+    float chroma_px = phase_sign * (1.2 + (center_x - 0.5) * 3.0) * phase_amt * gain;
+    float2 chroma_uv = clamp(uv + float2(chroma_px * uv_pixel_interval.x, 0.0), float2(0.0, 0.0), float2(1.0, 1.0));
+    float3 chroma_rgb = image.Sample(textureSampler, chroma_uv).rgb;
+
+    float y = luma3(chroma_rgb);
+    float u = chroma_rgb.b - y;
+    float v = chroma_rgb.r - y;
+    float2 turned = rotate2d(float2(u, v), theta);
+    float r = y + turned.y;
+    float b = y + turned.x;
+    float g = (y - 0.299 * r - 0.114 * b) / max(0.587, 0.001);
+    float3 shifted = float3(r, g, b);
+    shifted += luma3(color.rgb) - y;
+
+    float hit = saturate(intensity) * saturate(opacity);
+    float3 out_rgb = lerp(color.rgb, saturate(shifted), hit);
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
