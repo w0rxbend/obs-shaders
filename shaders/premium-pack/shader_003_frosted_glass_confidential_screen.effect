@@ -1,27 +1,71 @@
 // Filename: shader_003_frosted_glass_confidential_screen.effect
 // Category: Confidential / privacy pack
 // Effect: Frosted glass confidential screen
-// Visual principle: large-kernel signal destruction with pixel quantization and procedural privacy noise.
+// Visual principle: wide frost blur, cool milk tint, micro-refraction, and fine crystal grain.
 // What makes it cool: it hides readable details but leaves the audience aware that real content exists underneath.
 // Suggested source type: screen capture, browser source, IDEs, dashboards, documents
 // Suggested shader-chain combinations: soft vignette -> this shader -> subtle noise or scanline overlay
 // Performance cost: medium
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.09;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.19;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,53 +94,76 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
+float valueNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + float2(1.0, 0.0));
+    float c = hash12(i + float2(0.0, 1.0));
+    float d = hash12(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
-float alphaOut(float sampled_alpha)
-{
-    float a = sampled_alpha;
-    [branch]
-    if (!preserve_alpha)
-    {
-        a = 1.0;
-    }
-    return a * saturate(opacity);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
-    float2 pixels = max(float2(1.0, 1.0), uv_size);
-    float block = lerp(12.0, 42.0, saturate(amount * 0.7));
-    float2 cells = max(float2(1.0, 1.0), pixels / block);
-    float2 puv = (floor(uv * cells) + 0.5) / cells;
-    float2 px = uv_pixel_interval * (8.0 + amount * 24.0);
-    float4 blur = image.Sample(textureSampler, puv) * 0.36;
-    blur += image.Sample(textureSampler, clamp(puv + float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv + float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    float grain = hash12(floor(uv * pixels / max(2.0, block * 0.35)) + floor(elapsed_time * speed * 12.0));
-    float gray = luma3(blur.rgb);
-    float3 tint = float3(0.620, 0.760, 0.860);
-    float3 protected_rgb = lerp(blur.rgb, tint * (0.45 + gray * 0.55), 0.35 * intensity);
-    protected_rgb = lerp(protected_rgb, float3(gray, gray, gray), 0.35);
-    protected_rgb += (grain - 0.5) * 0.22 * intensity;
-    protected_rgb *= 1.0 - 0.20 * saturate(intensity);
-    float blend = saturate(0.82 + amount * 0.16);
-    float3 out_rgb = lerp(color.rgb, protected_rgb, blend);
-    return float4(saturate(out_rgb), alphaOut(color.a));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 crystal = float2(uv.x * aspect, uv.y) * (12.0 + amount * 8.0);
+    float2 drift = float2(0.12, 0.05) * elapsed_time * speed;
+    float nx = valueNoise(crystal + drift);
+    float ny = valueNoise(crystal + drift + float2(8.3, 3.1));
+    float2 pixel = abs(uv_pixel_interval);
+    float radius = 12.0 + amount * 18.0;
+    float2 bend = (float2(nx, ny) - 0.5) * pixel * (2.0 + amount * 5.0);
+    float2 glass_uv = clamp(uv + bend, 0.0, 1.0);
+
+    float2 inner = pixel * radius * 0.70;
+    float2 outer = pixel * radius;
+    float2 cardinal_x = float2(outer.x, 0.0);
+    float2 cardinal_y = float2(0.0, outer.y);
+    float2 diagonal_a = float2(inner.x, inner.y);
+    float2 diagonal_b = float2(-inner.x, inner.y);
+
+    float4 frost = image.Sample(textureSampler, clamp(glass_uv + cardinal_x, 0.0, 1.0)) * 0.125;
+    frost += image.Sample(textureSampler, clamp(glass_uv - cardinal_x, 0.0, 1.0)) * 0.125;
+    frost += image.Sample(textureSampler, clamp(glass_uv + cardinal_y, 0.0, 1.0)) * 0.125;
+    frost += image.Sample(textureSampler, clamp(glass_uv - cardinal_y, 0.0, 1.0)) * 0.125;
+    frost += image.Sample(textureSampler, clamp(glass_uv + diagonal_a, 0.0, 1.0)) * 0.125;
+    frost += image.Sample(textureSampler, clamp(glass_uv - diagonal_a, 0.0, 1.0)) * 0.125;
+    frost += image.Sample(textureSampler, clamp(glass_uv + diagonal_b, 0.0, 1.0)) * 0.125;
+    frost += image.Sample(textureSampler, clamp(glass_uv - diagonal_b, 0.0, 1.0)) * 0.125;
+
+    float gray = luma3(frost.rgb);
+    float milk_w = saturate(intensity * 0.42);
+    float3 milk = float3(0.74, 0.84, 0.93) * (0.42 + gray * 0.70);
+    float3 glass = lerp(frost.rgb, milk, milk_w);
+    glass = lerp(glass, float3(gray, gray, gray), saturate(intensity) * 0.22);
+
+    float2 pixels = max(uv_size, float2(1.0, 1.0));
+    float grain_tick = floor(elapsed_time * speed);
+    float grain = hash12(floor(uv * pixels * 0.5) + float2(grain_tick, 1.7));
+    glass += (grain - 0.5) * 0.05 * saturate(intensity);
+
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float sheen = saturate(1.0 - dot(from_center, from_center) * 2.2);
+    sheen = sheen * sheen * 0.10 * saturate(intensity);
+    glass += float3(sheen, sheen, sheen);
+
+    float out_a = color.a;
+    if (!preserve_alpha)
+    {
+        out_a = color.a * saturate(opacity);
+    }
+    return float4(saturate(glass), out_a);
 }
 
 technique Draw
