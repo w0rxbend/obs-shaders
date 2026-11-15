@@ -4,9 +4,29 @@
 // tilt_y : vertical tilt angle    (-0.3–0.3, default 0.1)
 // zoom   : overall zoom           (0.5–2.0,  default 1.0)
 
-uniform float tilt_x = 0.0;
-uniform float tilt_y = 0.1;
-uniform float zoom   = 1.0;
+uniform float tilt_x <
+    string label = "Tilt X";
+    string widget_type = "slider";
+    float minimum = -0.3;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.0;
+
+uniform float tilt_y <
+    string label = "Tilt Y";
+    string widget_type = "slider";
+    float minimum = -0.3;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.1;
+
+uniform float zoom <
+    string label = "Zoom";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
 
 uniform texture2d image;
 
@@ -36,7 +56,7 @@ float4 mainImage(VertData v_in) : TARGET
     float2 pTilted = p / w;
 
     // Apply zoom
-    float2 uvWarp = saturate((pTilted / zoom + 1.0) * 0.5);
+    float2 uvWarp = saturate((pTilted / max(zoom, 0.001) + 1.0) * 0.5);
 
     return image.Sample(textureSampler, uvWarp);
 }
