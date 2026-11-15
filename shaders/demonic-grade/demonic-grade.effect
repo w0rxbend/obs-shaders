@@ -5,9 +5,32 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float strength    = 0.8;
-uniform float shadow_red  = 0.15;
-uniform float contrast    = 2.5;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.8;
+
+uniform float shadow_red <
+    string label = "Shadow Red";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.15;
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 2.5;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -24,7 +47,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -53,8 +76,8 @@ float4 mainImage(VertData v_in) : TARGET
     float highlightMask = smoothstep(0.55, 1.0, contrasted);
     float3 withHighlights = lerp(demonicBase, demonicBase + rgb * 0.2, highlightMask);
 
-    float3 result = lerp(rgb, saturate(withHighlights), strength);
-    return float4(result, col.a);
+    float3 graded = lerp(rgb, saturate(withHighlights), strength);
+    return float4(saturate(graded), col.a);
 }
 
 technique Draw
