@@ -1,27 +1,70 @@
 // Filename: shader_040_burned_film_edges.effect
 // Category: Retro analog pack
 // Effect: Burned film edges
-// Visual principle: scanlines, field jitter, chroma drift, and time-varying tape damage.
-// What makes it cool: it sells nostalgic hardware instability with cheap procedural math.
+// Visual principle: ragged char along the frame with a slow ember band inside the crust, center left clear.
+// What makes it cool: the shot looks like scorched celluloid while a talking head stays recognizable.
 // Suggested source type: game capture, retro scenes, video source, screen capture
-// Suggested shader-chain combinations: this shader -> chromatic aberration -> vignette
-// Performance cost: medium
-// Alpha safe: no
+// Suggested shader-chain combinations: color grade -> this shader -> light film grain
+// Performance cost: low
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.85;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,50 +93,57 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
-    float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
-    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
-    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
-    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
-    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
-    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
-    float rch = image.Sample(textureSampler, uv_r).r;
-    float gch = image.Sample(textureSampler, uv_g).g;
-    float bch = image.Sample(textureSampler, uv_b).b;
-    float noise = hash12(floor(uv * uv_size / 3.0) + floor(t * 20.0)) - 0.5;
-    float3 tint = float3(0.550, 0.700, 0.950);
-    float3 out_rgb = float3(rch, gch, bch) * scan;
-    out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
-    out_rgb += noise * 0.08 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 inset = min(uv, float2(1.0, 1.0) - uv);
+    inset.x *= aspect;
+    float inward = min(inset.x, inset.y);
+
+    float nearer_side = step(inset.x, inset.y);
+    float along = lerp(uv.x, uv.y, nearer_side);
+    float clock = elapsed_time - floor(elapsed_time * (1.0 / 120.0)) * 120.0;
+    float time_s = clock * speed;
+    float cell = floor(along * 16.0);
+    float ragged = hash12(float2(cell, 2.0)) * 0.50;
+    ragged += hash12(float2(floor(along * 7.0), 5.0)) * 0.30;
+    ragged += hash12(float2(cell, floor(time_s * 0.22) + 3.0)) * 0.20;
+
+    float2 center = float2(center_x, center_y);
+    float2 from_center = uv - center;
+    float2 toward_far_edge = step(float2(0.0, 0.0), from_center);
+    float2 room = lerp(center, float2(1.0, 1.0) - center, toward_far_edge);
+    room = max(room, float2(0.001, 0.001));
+    float away = saturate(max(abs(from_center.x) / room.x, abs(from_center.y) / room.y));
+    float pulse = 0.94 + 0.06 * sin(time_s * 0.8 + along * 14.0);
+    float reach = (0.028 + 0.075 * amount) * lerp(0.72, 1.18, ragged) * pulse;
+    reach *= lerp(0.55, 1.0, away);
+
+    float crust = 1.0 - smoothstep(reach * 0.08, reach * 0.42, inward);
+    float ember = smoothstep(0.0, reach * 0.22, inward);
+    ember *= 1.0 - smoothstep(reach * 0.32, reach, inward);
+    float cover = saturate(amount * intensity);
+    crust = saturate(crust * cover);
+    ember = saturate(ember * cover);
+
+    float3 graded = lerp(source.rgb, float3(0.012, 0.005, 0.003), crust);
+    graded = lerp(graded, float3(0.90, 0.34, 0.05), ember * (1.0 - crust * 0.35));
+    graded = saturate(graded);
+    float3 out_rgb = lerp(source.rgb, graded, saturate(opacity));
+    return float4(out_rgb, alphaOut(source.a));
 }
 
 technique Draw
