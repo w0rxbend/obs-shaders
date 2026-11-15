@@ -7,9 +7,33 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float progress = 0.5;    // 0.0 = fully visible, 1.0 = fully wiped away
-uniform float angle    = 0.0;    // 0.0–6.2832 radians; 0 = left-to-right wipe
-uniform float softness = 0.02;   // 0.0–0.1 edge feather width
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float progress <
+    string label = "Progress";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float angle <
+    string label = "Angle";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 6.2832;
+    float step = 0.01;
+> = 0.0;
+
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.02;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,27 +50,28 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv    = v_in.uv;
+    float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
 
-    // Project uv onto wipe direction vector
-    float2 dir   = float2(cos(angle), sin(angle));
-    // Centered uv: range -0.5..0.5
-    float2 cuv   = uv - float2(0.5, 0.5);
-    float  proj  = dot(cuv, dir) + 0.5; // back to 0..1 range
+    // Frame aspect, not the UV square, so a diagonal wipe reaches every corner.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 dir = float2(cos(angle), sin(angle));
+    float2 centered = (uv - float2(0.5, 0.5)) * float2(aspect, 1.0);
+    float along = dot(centered, dir);
+    float span = max(aspect * abs(dir.x) + abs(dir.y), 0.001);
+    float proj = along / span + 0.5;
 
-    // progress=0 → edge at -softness (everything visible)
-    // progress=1 → edge at 1+softness (everything gone)
-    float  edge  = progress;
-    float  alpha = 1.0 - smoothstep(edge - softness, edge + softness, proj);
+    float feather = max(softness, 0.001);
+    float edge = lerp(-feather, 1.0 + feather, saturate(progress));
+    float visible = smoothstep(edge - feather, edge + feather, proj);
 
-    color.a     *= alpha;
+    color.rgb *= visible;
     return color;
 }
 
