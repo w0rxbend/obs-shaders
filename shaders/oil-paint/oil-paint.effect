@@ -3,6 +3,8 @@
 // The older runtime-sized bucket loops were expensive in live OBS scenes.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform int radius = 3;  // 1 – 6   half-width of sampling window
 uniform int levels = 8;  // 4 – 16  brightness quantisation buckets
 
@@ -25,7 +27,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,7 +52,7 @@ float4 mainImage(VertData v_in) : TARGET
     float3 avg = (s0.rgb + s1.rgb + s2.rgb + s3.rgb + s4.rgb + s5.rgb + s6.rgb + s7.rgb + s8.rgb) / 9.0;
     float l = dot(avg, float3(0.299, 0.587, 0.114));
     float edge = length(src.rgb - avg);
-    float lvls = float(clamp(levels, 4, 16));
+    float lvls = max(float(clamp(levels, 4, 16)), 0.001);
 
     float3 paint = floor(avg * lvls + 0.5) / lvls;
     paint = lerp(paint, float3(l, l, l), saturate(edge * 0.45));
