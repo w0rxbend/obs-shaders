@@ -3,12 +3,35 @@
 // Luminance of each grid cell drives the dot radius; the grid can be rotated.
 
 uniform float4x4 ViewProj;
-uniform float dot_size = 6.0;  // 2.0 – 20.0  grid cell size in pixels
-uniform float angle    = 0.0;  // 0.0 – 3.14159  grid rotation in radians
-uniform float contrast = 1.2;  // 0.5 – 3.0  luminance contrast before sizing
-
-uniform float2    uv_pixel_interval;
 uniform texture2d image;
+
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float dot_size <
+    string label = "Dot Size";
+    string widget_type = "slider";
+    float minimum = 2.0;
+    float maximum = 20.0;
+    float step = 0.1;
+> = 6.0;
+
+uniform float angle <
+    string label = "Angle";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.14159;
+    float step = 0.01;
+> = 0.0;
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.2;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -21,16 +44,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-// Rotate a 2-D point by angle theta.
 float2 rotate2D(float2 p, float theta)
 {
     float s = sin(theta);
@@ -41,49 +62,30 @@ float2 rotate2D(float2 p, float theta)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
+    float2 pixelSize = max(uv_size, float2(1.0, 1.0));
+    float cellSize = max(dot_size, 0.001);
 
-    // Convert UV to pixel-space coordinates.
-    float2 pixelPos = uv / uv_pixel_interval;
+    // Pixel space keeps round dots on widescreen, and the inverse rotation stays in that space.
+    float2 pixelPos = uv * pixelSize;
+    float2 center = float2(0.5, 0.5) * pixelSize;
+    float2 rotPos = rotate2D(pixelPos - center, angle) + center;
 
-    // Rotate pixel position around screen centre.
-    float2 centre = float2(0.5, 0.5) / uv_pixel_interval;
-    float2 rotPos = rotate2D(pixelPos - centre, angle) + centre;
+    float2 cell = floor(rotPos / cellSize);
+    float2 cellCentre = (cell + 0.5) * cellSize;
 
-    // Find the halftone grid cell this pixel belongs to.
-    float2 cell = floor(rotPos / dot_size);
-
-    // Centre of that cell in rotated pixel space.
-    float2 cellCentre = (cell + 0.5) * dot_size;
-
-    // Sample the source at the cell centre (convert back to UV).
-    float2 sampleUV = cellCentre * uv_pixel_interval;
-    sampleUV = rotate2D(sampleUV - float2(0.5, 0.5), -angle) + float2(0.5, 0.5);
-    sampleUV = clamp(sampleUV, float2(0.0, 0.0), float2(1.0, 1.0));
-
+    float2 samplePx = rotate2D(cellCentre - center, -angle) + center;
+    float2 sampleUV = clamp(samplePx / pixelSize, float2(0.0, 0.0), float2(1.0, 1.0));
     float4 srcColor = image.Sample(textureSampler, sampleUV);
 
-    // Luminance of the sampled cell colour.
     float lum = dot(srcColor.rgb, float3(0.299, 0.587, 0.114));
-
-    // Apply contrast around the mid-point.
     lum = saturate((lum - 0.5) * contrast + 0.5);
 
-    // Dot radius: bright cells → small dot (white paper shows through);
-    // dark cells → large dot fills the cell.
-    float maxRadius = dot_size * 0.5;
-    float radius    = maxRadius * (1.0 - lum);
+    // Bright cells leave small dots so the paper shows; dark cells fill the cell.
+    float radius = cellSize * 0.5 * (1.0 - lum);
+    float ink = step(length(rotPos - cellCentre), radius);
+    float3 col = lerp(float3(1.0, 1.0, 1.0), float3(0.0, 0.0, 0.0), ink);
 
-    // Distance from this pixel to the cell centre (in rotated space).
-    float dist = length(rotPos - cellCentre);
-
-    // Inside the dot → black ink; outside → white paper.
-    float ink = step(dist, radius);
-
-    float3 paperColor = float3(1.0, 1.0, 1.0);
-    float3 inkColor   = float3(0.0, 0.0, 0.0);
-    float3 col        = lerp(paperColor, inkColor, ink);
-
-    return float4(col, srcColor.a);
+    return float4(saturate(col), srcColor.a);
 }
 
 technique Draw
