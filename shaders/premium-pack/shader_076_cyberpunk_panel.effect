@@ -1,8 +1,8 @@
 // Filename: shader_076_cyberpunk_panel.effect
 // Category: Streamer branding pack
 // Effect: Cyberpunk panel
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: inset HUD panel with a dark bezel, cyan-magenta corner brackets, a header rail, and a slow scan.
+// What makes it cool: a webcam sits in a cyberpunk panel while the face stays readable and in place.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.93;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,53 +82,110 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
+    float alpha = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        alpha = 1.0;
     }
-    return a * saturate(opacity);
+    return alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float panel = saturate(amount * 0.5);
+    float punch = max(intensity, 0.0);
+    float margin_y = lerp(0.035, 0.120, panel);
+    float margin_x = min(margin_y / max(aspect, 0.001), 0.28);
     float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.70) + sin(t * 0.37 + 4.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 76.0), cos(t * 0.73 + 10.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float half_h = max(0.5 - margin_y, 0.12);
+    float half_w = max(0.5 - margin_x, 0.12);
+
+    float2 from_center = uv - center;
+    float2 delta = abs(from_center) - float2(half_w, half_h);
+    float2 delta_h = float2(delta.x * aspect, delta.y);
+    float signed_distance = length(max(delta_h, float2(0.0, 0.0))) + min(max(delta_h.x, delta_h.y), 0.0);
+    float inside = 1.0 - smoothstep(-0.002, 0.004, signed_distance);
+
+    float stroke = lerp(0.007, 0.014, saturate(punch * 0.5));
+    float rim = 1.0 - smoothstep(stroke * 0.28, stroke, abs(signed_distance));
+    float glow = (1.0 - smoothstep(stroke, stroke * 3.2, abs(signed_distance))) * inside;
+
+    float2 inward = float2(half_w, half_h) - abs(from_center);
+    float2 inward_h = float2(inward.x * aspect, inward.y);
+    float arm = lerp(0.050, 0.090, panel);
+    float thick = stroke * 1.7;
+    float horizontal_arm = (1.0 - smoothstep(thick * 0.45, thick, abs(inward_h.y)))
+        * (1.0 - smoothstep(arm, arm + 0.012, inward_h.x))
+        * step(-thick, inward_h.x);
+    float vertical_arm = (1.0 - smoothstep(thick * 0.45, thick, abs(inward_h.x)))
+        * (1.0 - smoothstep(arm, arm + 0.012, inward_h.y))
+        * step(-thick, inward_h.y);
+    float brackets = saturate(max(horizontal_arm, vertical_arm));
+
+    float y_from_top = uv.y - (center.y - half_h);
+    float x_from_left = uv.x - (center.x - half_w);
+    float x_from_right = (center.x + half_w) - uv.x;
+    float header_h = 0.024;
+    float header = smoothstep(-0.001, 0.003, y_from_top)
+        * (1.0 - smoothstep(header_h, header_h + 0.004, y_from_top))
+        * smoothstep(-0.001, 0.003, x_from_left)
+        * smoothstep(-0.001, 0.003, x_from_right)
+        * inside;
+    float ticks = smoothstep(0.78, 0.94, frac(x_from_left / max(0.050, 0.001)));
+
+    float rail_w = 0.010 / max(aspect, 0.001);
+    float left_rail = smoothstep(0.0, 0.003, x_from_left) * (1.0 - smoothstep(rail_w, rail_w + 0.004, x_from_left));
+    float right_rail = smoothstep(0.0, 0.003, x_from_right) * (1.0 - smoothstep(rail_w, rail_w + 0.004, x_from_right));
+    float rail_tick = smoothstep(0.62, 0.84, frac(y_from_top / max(0.038, 0.001)));
+    float rail_gate = rail_tick * inside * (1.0 - header);
+    float left_mark = left_rail * rail_gate;
+    float right_mark = right_rail * rail_gate;
+
+    float luma = dot(source.rgb, float3(0.299, 0.587, 0.114));
+    float3 cooled = source.rgb * float3(0.86, 1.0, 1.10) + float3(0.0, 0.03, 0.05) * luma;
+    float3 interior = lerp(source.rgb, cooled, saturate(0.30 * punch));
+    float scanline = 0.94 + 0.06 * sin(uv.y * max(uv_size.y, 1.0) * 1.570796);
+    interior *= lerp(1.0, scanline, saturate(0.35 * punch));
+
+    // 0.08*speed cycles per second. At the default 1.73 that is about 0.14 Hz, under the 3 Hz full-frame flash cap.
+    float scan_pos = frac(elapsed_time * max(speed, 0.0) * 0.08);
+    float span = max(half_h * 2.0, 0.001);
+    float along = (uv.y - (center.y - half_h)) / span;
+    float beam = exp(-abs(along - scan_pos) * 42.0) * inside * (1.0 - header);
+    interior += float3(0.10, 0.75, 1.0) * beam * 0.18 * punch;
+
+    float outside_level = lerp(0.36, 0.16, panel);
+    float3 chassis = source.rgb * outside_level + float3(0.010, 0.016, 0.028);
+    float3 framed = lerp(chassis, interior, inside);
+
+    float pulse = 0.78 + 0.22 * sin(elapsed_time * max(speed, 0.0) * 1.15);
+    float hue = 0.5 + 0.5 * sin(elapsed_time * max(speed, 0.0) * 0.55);
+    float3 cyan = float3(0.10, 0.95, 1.0);
+    float3 magenta = float3(1.0, 0.12, 0.62);
+    float3 neon = lerp(cyan, magenta, hue) * pulse;
+
+    float3 header_rgb = lerp(float3(0.02, 0.05, 0.07), cyan, 0.22 + 0.50 * ticks);
+    framed = lerp(framed, header_rgb, header * 0.92);
+    framed = lerp(framed, cyan, left_mark * saturate(punch));
+    framed = lerp(framed, magenta, right_mark * saturate(punch));
+    framed = lerp(framed, neon, saturate(rim * punch));
+    framed = lerp(framed, neon, brackets * saturate(punch));
+    framed += neon * glow * 0.20 * punch;
+    framed = saturate(framed);
+
+    float3 shown = lerp(source.rgb, framed, saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
