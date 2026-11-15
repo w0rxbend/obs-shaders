@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.93;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.5;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,47 +98,52 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
-    float2 pixels = max(float2(1.0, 1.0), uv_size);
-    float block = lerp(12.0, 42.0, saturate(amount * 0.7));
-    float2 cells = max(float2(1.0, 1.0), pixels / block);
-    float2 puv = (floor(uv * cells) + 0.5) / cells;
-    float2 px = uv_pixel_interval * (8.0 + amount * 24.0);
-    float4 blur = image.Sample(textureSampler, puv) * 0.36;
-    blur += image.Sample(textureSampler, clamp(puv + float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv + float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    float grain = hash12(floor(uv * pixels / max(2.0, block * 0.35)) + floor(elapsed_time * speed * 12.0));
-    float gray = luma3(blur.rgb);
-    float3 tint = float3(0.620, 0.760, 0.860);
-    float3 protected_rgb = lerp(blur.rgb, tint * (0.45 + gray * 0.55), 0.35 * intensity);
-    protected_rgb = lerp(protected_rgb, float3(gray, gray, gray), 0.35);
-    protected_rgb += (grain - 0.5) * 0.22 * intensity;
-    protected_rgb *= 1.0 - 0.20 * saturate(intensity);
-    float blend = saturate(0.82 + amount * 0.16);
-    float3 out_rgb = lerp(color.rgb, protected_rgb, blend);
+    float2 pixels = max(uv_size, float2(1.0, 1.0));
+    float block = max(lerp(16.0, 56.0, saturate(amount)), 0.001);
+    float2 cells = max(pixels / block, float2(1.0, 1.0));
+    float2 quant_uv = (floor(uv * cells) + 0.5) / max(cells, float2(0.001, 0.001));
+    quant_uv = clamp(quant_uv, 0.0, 1.0);
+    float4 blocked = image.Sample(textureSampler, quant_uv);
+
+    // speed is hertz. Cap at 2.5 so a full close stays under 3 per second.
+    float pulse_hz = min(max(speed, 0.0), 2.5);
+    float pulse = 0.5 + 0.5 * sin(elapsed_time * pulse_hz * 6.2831853);
+    float phase = floor(elapsed_time * pulse_hz);
+    float grain = hash12(floor(uv * cells) + phase);
+
+    float gray = luma3(blocked.rgb);
+    float strength = saturate(intensity);
+    float3 secured = lerp(blocked.rgb, float3(gray, gray, gray), 0.75 * strength);
+    secured *= lerp(1.0, 0.78, strength);
+    secured = lerp(secured, secured * float3(0.55, 0.68, 0.78), 0.40 * strength);
+    float scan = 0.88 + 0.12 * frac(uv.y * pixels.y * 0.5);
+    secured *= scan;
+    secured += (grain - 0.5) * 0.08 * strength;
+
+    float aspect = pixels.x / max(pixels.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    float dist = length(float2(from_center.x * aspect, from_center.y));
+    float close = saturate(pulse * amount);
+    float radius = lerp(1.45, -0.06, close * strength);
+    float shutter = smoothstep(radius, radius + 0.045, dist);
+    float3 blackout = lerp(secured, float3(0.0, 0.0, 0.0), shutter);
+
+    float3 out_rgb = lerp(color.rgb, blackout, saturate(opacity));
     return float4(saturate(out_rgb), alphaOut(color.a));
 }
 
