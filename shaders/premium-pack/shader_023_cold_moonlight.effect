@@ -1,27 +1,70 @@
 // Filename: shader_023_cold_moonlight.effect
 // Category: Cinematic camera pack
 // Effect: Cold moonlight
-// Visual principle: luminance-aware color remapping, contrast shaping, vignette, and animated grain.
+// Visual principle: silver-blue night grade, cool shadows, a soft moon pool, and slow grain.
 // What makes it cool: it gives ordinary footage a clear emotional direction in one pass.
 // Suggested source type: webcam, game capture, video source, cinematic scenes
 // Suggested shader-chain combinations: exposure controls -> this shader -> film grain
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.09;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,41 +98,53 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
+float4 mainImage(VertData v_in) : TARGET
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 color = image.Sample(textureSampler, uv);
+    float gray = luma3(color.rgb);
+    float strength = saturate(intensity * 0.5);
+    float silver = saturate(amount * 0.45);
 
-float alphaOut(float sampled_alpha)
-{
-    float a = sampled_alpha;
+    float3 silver_rgb = float3(gray * 0.86, gray * 0.93, gray * 1.08);
+    float3 graded = lerp(color.rgb, silver_rgb, silver);
+
+    float shadow = 1.0 - smoothstep(0.15, 0.72, gray);
+    graded.r -= strength * (0.08 + shadow * 0.10);
+    graded.g += strength * 0.02;
+    graded.b += strength * (0.10 + shadow * 0.12);
+
+    float contrast = 1.0 + saturate(intensity) * 0.14;
+    graded = (graded - 0.5) * contrast + 0.5;
+
+    // Landscape frames are wider than tall, so the moon pool stays round.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_moon = uv - float2(center_x, center_y);
+    from_moon.x *= aspect;
+    float corner = length(float2(0.5 * aspect, 0.5));
+    float falloff = length(from_moon) / max(corner, 0.001);
+    float pool = 1.0 - smoothstep(0.12, 0.95, falloff);
+    float shade = lerp(0.82, 1.05, pool);
+    graded *= lerp(1.0, shade, saturate(intensity * 0.65));
+
+    float3 moon = float3(0.74, 0.84, 1.0);
+    graded = lerp(graded, graded * moon, pool * 0.22 * silver);
+
+    // Two grain steps per second at speed 1 stays under a 3 Hz full-frame flash.
+    float grain_step = floor(elapsed_time * clamp(speed, 0.0, 3.0) * 2.0);
+    float2 grain_cell = floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.5);
+    float grain = hash12(grain_cell + float2(grain_step, grain_step * 0.37)) - 0.5;
+    graded += grain * 0.03 * strength;
+
+    graded = saturate(graded);
+    float3 out_rgb = lerp(color.rgb, graded, saturate(opacity));
+    float out_a = color.a;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        out_a = saturate(color.a);
     }
-    return a * saturate(opacity);
-}
-
-float4 mainImage(VertData v_in) : TARGET
-{
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float gray = luma3(color.rgb);
-    float3 tint = float3(0.480, 0.620, 0.920);
-    float3 warm = float3(1.05, 0.88 + 3 * 0.03, 0.72);
-    float3 cool = float3(0.70, 0.88, 1.12);
-    float vignette = smoothstep(0.88, 0.18, length((uv - float2(center_x, center_y)) * float2(1.15, 1.0)));
-    float grain = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.55) + floor(elapsed_time * speed * 18.0)) - 0.5;
-    float3 graded = lerp(color.rgb, float3(gray, gray, gray), 0.12 + 0.18 * amount);
-    graded = (graded - 0.5) * (1.0 + 0.45 * intensity) + 0.5;
-    graded *= lerp(cool, warm, saturate(tint.r + 0.25));
-    graded = lerp(graded, tint * (0.25 + gray * 0.95), 0.20 * intensity);
-    graded *= 0.72 + vignette * 0.38;
-    graded += grain * 0.045 * intensity;
-    return float4(saturate(graded), alphaOut(color.a));
+    return float4(out_rgb, out_a);
 }
 
 technique Draw
