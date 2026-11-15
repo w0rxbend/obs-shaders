@@ -3,12 +3,37 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
-uniform float    elapsed_time;
 
-uniform float green_strength = 0.8;
-uniform float noise_amount   = 0.08;
-uniform bool  scanlines      = true;
-uniform float vignette       = 0.5;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+uniform float elapsed_time;
+
+uniform float green_strength <
+    string label = "Green Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.8;
+
+uniform float noise_amount <
+    string label = "Noise Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.08;
+
+uniform bool scanlines = true;
+
+uniform float vignette <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -25,7 +50,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -36,37 +61,32 @@ float hash21(float2 p)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv  = v_in.uv;
+    float2 uv = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    // Desaturate
     float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
-
-    // Map luma to green channel — output is (low_g, green, low_b)
     float greenOut = luma * (1.0 + green_strength * 0.8);
-    float3 nvBase  = float3(luma * 0.1, saturate(greenOut), luma * 0.05);
+    float3 nvBase = float3(luma * 0.1, saturate(greenOut), luma * 0.05);
 
-    // Scanlines
     float scanVal = 1.0;
     if (scanlines) {
-        // Every other pixel row dims slightly
-        float line    = floor(uv.y * 540.0); // ~540 lines reference
-        scanVal       = (frac(line * 0.5) < 0.5) ? 0.75 : 1.0;
+        float line = floor(uv.y * 540.0);
+        scanVal = (frac(line * 0.5) < 0.5) ? 0.75 : 1.0;
     }
     nvBase *= scanVal;
 
-    // Animated noise
-    float2 noiseCoord = uv * float2(320.0, 240.0);
-    float  noiseSeed  = floor(elapsed_time * 24.0); // 24fps grain change
-    float  n          = hash21(floor(noiseCoord) + float2(noiseSeed * 17.3, noiseSeed * 31.1));
-    // Bias noise so it mostly brightens
+    // Square grain. 24 Hz is texture cadence, not a full-frame flash.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 noiseCoord = uv * float2(240.0 * aspect, 240.0);
+    float noiseSeed = floor(elapsed_time * 24.0);
+    float n = hash21(floor(noiseCoord) + float2(noiseSeed * 17.3, noiseSeed * 31.1));
     float noiseOffset = (n - 0.3) * noise_amount;
-    nvBase.g          = saturate(nvBase.g + noiseOffset);
+    nvBase.g = saturate(nvBase.g + noiseOffset);
 
-    // Vignette
-    float2 centered = uv - 0.5;
-    float  vigDist  = dot(centered, centered) * 4.0;
-    nvBase          = nvBase * (1.0 - saturate(vigDist) * vignette);
+    // Round tube on widescreen. Corners dim; the face stays readable.
+    float2 centered = (uv - 0.5) * float2(aspect, 1.0);
+    float vigDist = dot(centered, centered) * 4.0;
+    nvBase = nvBase * (1.0 - saturate(vigDist) * vignette);
 
     return float4(saturate(nvBase), col.a);
 }
