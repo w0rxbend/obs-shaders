@@ -1,10 +1,37 @@
 // A7 — exposure-controls
 // Exposure (EV), gamma, contrast, and saturation in one shader.
 
-uniform float exposure   = 0.0; // -3.0 – 3.0 EV
-uniform float gamma      = 1.0; // 0.1 – 3.0
-uniform float contrast   = 1.0; // 0.0 – 3.0
-uniform float saturation = 1.0; // 0.0 – 3.0
+uniform float exposure <
+    string label = "Exposure (EV)";
+    string widget_type = "slider";
+    float minimum = -3.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.0;
+
+uniform float gamma <
+    string label = "Gamma";
+    string widget_type = "slider";
+    float minimum = 0.1;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float saturation <
+    string label = "Saturation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.0;
 
 uniform texture2d image;
 
@@ -40,5 +67,5 @@ float4 mainImage(VertData v_in) : TARGET
     float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
     c = lerp(float3(luma, luma, luma), c, saturation);
 
-    return float4(saturate(c), col.a);
+    return float4(c, col.a);
 }
