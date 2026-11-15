@@ -6,22 +6,66 @@
 // Suggested source type: game capture, retro scenes, video source, screen capture
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> vignette
 // Performance cost: medium
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.01;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,36 +99,33 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
+    // Wrap so a long stream does not quantize the tape phase.
+    float clock = elapsed_time - floor(elapsed_time * (1.0 / 180.0)) * 180.0;
+    float t = clock * speed;
     float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
     float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
-    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
-    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
-    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
-    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
-    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
+    float row_bias = (center_y - 0.5) * 18.0;
+    float track = (center_x - 0.5) * 0.04 * amount;
+    float band = sin(uv.y * 42.0 + t * 5.0 + row_bias) * 0.006 * amount;
+    float tear = (hash12(float2(floor(uv.y * 18.0 + row_bias), floor(t * 3.0))) - 0.5) * 0.020 * amount;
+    float2 uv_r = clamp(uv + float2(band + tear + track, 0.0), 0.0, 1.0);
+    float2 uv_g = clamp(uv + float2(-band * 0.35 + track, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
+    float2 uv_b = clamp(uv + float2(-band - tear * 0.5 + track, 0.0), 0.0, 1.0);
     float rch = image.Sample(textureSampler, uv_r).r;
     float gch = image.Sample(textureSampler, uv_g).g;
     float bch = image.Sample(textureSampler, uv_b).b;
@@ -93,7 +134,8 @@ float4 mainImage(VertData v_in) : TARGET
     float3 out_rgb = float3(rch, gch, bch) * scan;
     out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
     out_rgb += noise * 0.08 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float3 cursed = lerp(color.rgb, saturate(out_rgb), saturate(opacity));
+    return float4(cursed, alphaOut(color.a));
 }
 
 technique Draw
