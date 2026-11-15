@@ -3,13 +3,51 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
 uniform float elapsed_time;
 
-uniform float speed = 0.45;
-uniform float amount = 1.0;
-uniform float zoom_compensation = 0.045;
-uniform float center_x = 0.5;
-uniform float center_y = 0.48;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.45;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float zoom_compensation <
+    string label = "Zoom Compensation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.001;
+> = 0.045;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.48;
+
 uniform bool strong_preset = false;
 
 sampler_state textureSampler {
@@ -27,7 +65,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -48,8 +86,13 @@ float4 mainImage(VertData v_in) : TARGET
     float breathe = (sin(t * 0.83) * 0.5 + 0.5) * 0.012 * amount * preset;
     float zoom = 1.0 + max(0.0, zoom_compensation) + breathe + length(sway) * 1.8 + abs(angle);
 
-    float2 p = (v_in.uv - center) / zoom;
-    float2 uv = center + rotate2d(p, angle) - sway;
+    // Height fractions so the idle roll stays circular on a wide frame.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 p = (v_in.uv - center) / max(zoom, 0.001);
+    p.x *= aspect;
+    p = rotate2d(p, angle);
+    p.x /= max(aspect, 0.001);
+    float2 uv = center + p - sway;
     return image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
 }
 
