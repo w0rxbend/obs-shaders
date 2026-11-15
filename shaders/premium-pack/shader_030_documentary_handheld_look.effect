@@ -1,7 +1,7 @@
 // Filename: shader_030_documentary_handheld_look.effect
 // Category: Cinematic camera pack
 // Effect: Documentary handheld look
-// Visual principle: luminance-aware color remapping, contrast shaping, vignette, and animated grain.
+// Visual principle: organic shoulder-cam drift and roll, with a muted documentary grade, vignette, and grain.
 // What makes it cool: it gives ordinary footage a clear emotional direction in one pass.
 // Suggested source type: webcam, game capture, video source, cinematic scenes
 // Suggested shader-chain combinations: exposure controls -> this shader -> film grain
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.85;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -76,20 +119,50 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float gray = luma3(color.rgb);
-    float3 tint = float3(0.100, 0.500, 0.620);
-    float3 warm = float3(1.05, 0.88 + 2 * 0.03, 0.72);
-    float3 cool = float3(0.70, 0.88, 1.12);
-    float vignette = smoothstep(0.88, 0.18, length((uv - float2(center_x, center_y)) * float2(1.15, 1.0)));
-    float grain = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.55) + floor(elapsed_time * speed * 18.0)) - 0.5;
-    float3 graded = lerp(color.rgb, float3(gray, gray, gray), 0.12 + 0.18 * amount);
-    graded = (graded - 0.5) * (1.0 + 0.45 * intensity) + 0.5;
-    graded *= lerp(cool, warm, saturate(tint.r + 0.25));
-    graded = lerp(graded, tint * (0.25 + gray * 0.95), 0.20 * intensity);
-    graded *= 0.72 + vignette * 0.38;
-    graded += grain * 0.045 * intensity;
-    return float4(saturate(graded), alphaOut(color.a));
+    float t = elapsed_time * speed;
+    float motion = amount * intensity;
+    float grade = saturate(motion);
+    float2 center = float2(center_x, center_y);
+    // UV x is wider than y on a webcam, so the weave stays circular.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float safe_aspect = max(aspect, 0.001);
+
+    float sway = sin(t * 0.63) + sin(t * 1.47 + 1.7) * 0.35;
+    float bob = sin(t * 0.91 + 0.4) + sin(t * 2.11 + 2.3) * 0.22;
+    float roll = sin(t * 0.47 + 0.8) + sin(t * 1.19) * 0.30;
+    float angle = roll * 0.010 * motion;
+    float2 drift = float2(sway * 0.010, bob * 0.007) * motion;
+    drift.x /= safe_aspect;
+
+    // Zoom covers the weave so clamp does not smear the frame edge.
+    float zoom = 1.0 + abs(angle) * 2.4 + length(drift) * 2.6;
+    float2 from_center = (uv - center) / max(zoom, 0.001);
+    from_center.x *= safe_aspect;
+    from_center = rotate2d(from_center, angle);
+    from_center.x /= safe_aspect;
+    float2 sample_uv = clamp(center + from_center - drift, float2(0.0, 0.0), float2(1.0, 1.0));
+
+    float4 source = image.Sample(textureSampler, sample_uv);
+    float luma = luma3(source.rgb);
+    float3 neutral = float3(luma, luma, luma);
+    float3 shaped = lerp(source.rgb, neutral, 0.22 * grade);
+    shaped = (shaped - 0.5) * (1.0 + 0.16 * grade) + 0.5;
+
+    float shadow_w = 1.0 - smoothstep(0.05, 0.45, luma);
+    float skin_w = smoothstep(0.25, 0.70, luma);
+    shaped = lerp(shaped, shaped * float3(0.86, 0.92, 1.02), shadow_w * 0.28 * grade);
+    shaped = lerp(shaped, shaped * float3(1.06, 0.98, 0.90), skin_w * 0.22 * grade);
+
+    float2 from_vig = (uv - center) * float2(safe_aspect, 1.0);
+    float vignette = smoothstep(1.15, 0.35, length(from_vig));
+    shaped *= 1.0 - (1.0 - vignette) * 0.14 * grade;
+
+    float2 grain_cell = floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.45);
+    float grain_tick = floor(elapsed_time * speed * 8.0);
+    float grain = hash12(grain_cell + float2(grain_tick, grain_tick * 0.37)) - 0.5;
+    shaped += grain * 0.030 * grade;
+
+    return float4(saturate(shaped), alphaOut(source.a));
 }
 
 technique Draw
