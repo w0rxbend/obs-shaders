@@ -6,9 +6,31 @@
 // Chain order: Apply first in chain before any color grading
 
 uniform float4x4 ViewProj;
-uniform float size     = 0.45; // 0.1 – 0.5
-uniform float softness = 0.008; // 0.001 – 0.05
-uniform float rotation = 0.0;  // 0.0 – 3.14159 radians
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float size <
+    string label = "Size";
+    string widget_type = "slider";
+    float minimum = 0.1;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.45;
+uniform float softness <
+    string label = "Edge Softness";
+    string widget_type = "slider";
+    float minimum = 0.001;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.008;
+uniform float rotation <
+    string label = "Rotation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.14159;
+    float step = 0.01;
+> = 0.0;
 
 uniform texture2d image;
 
@@ -27,36 +49,42 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-// Regular hexagon SDF (returns positive outside, negative inside)
-float sdfHexagon(float2 p, float r)
+// Regular hexagon SDF (returns positive outside, negative inside).
+// flat_half is tan(30 deg) times the apothem; 0.5 makes the sides unequal.
+float sdfHexagon(float2 p, float radius)
 {
-    // Hexagon constants
-    float2 k = float2(-0.866025404, 0.5); // -sqrt(3)/2, 0.5
+    float2 sector = float2(-0.866025404, 0.5);
+    float flat_half = 0.577350269 * radius;
     p = abs(p);
-    p -= 2.0 * min(dot(k, p), 0.0) * k;
-    p -= float2(clamp(p.x, -k.y * r, k.y * r), r);
+    p -= 2.0 * min(dot(sector, p), 0.0) * sector;
+    p -= float2(clamp(p.x, -flat_half, flat_half), radius);
     return length(p) * sign(p.y);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv  = v_in.uv;
+    float2 uv = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    // Center and rotate
-    float2 p   = uv - float2(0.5, 0.5);
-    float  c   = cos(rotation);
-    float  s   = sin(rotation);
-    p = float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    // Height-fraction space keeps a regular hexagon on a non-square webcam.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 p = uv - float2(0.5, 0.5);
+    p.x *= aspect;
+    float cos_rotation = cos(rotation);
+    float sin_rotation = sin(rotation);
+    p = float2(
+        p.x * cos_rotation - p.y * sin_rotation,
+        p.x * sin_rotation + p.y * cos_rotation);
 
-    float  d     = sdfHexagon(p, size);
-    float  alpha = 1.0 - smoothstep(-softness, softness, d);
+    float dist = sdfHexagon(p, size);
+    float edge = max(softness, 0.001);
+    float mask = 1.0 - smoothstep(-edge, edge, dist);
 
-    col.a *= alpha;
+    col.a *= mask;
     return col;
 }
 
