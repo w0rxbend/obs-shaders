@@ -2,9 +2,32 @@
 // Sobel edge detection rendered as dark pencil lines on a bright paper background.
 
 uniform float4x4 ViewProj;
-uniform float line_strength     = 2.0;  // 0.0 – 5.0   edge amplification
-uniform float paper_brightness  = 0.95; // 0.0 – 1.0   base paper whiteness
-uniform float line_darkness     = 0.85; // 0.0 – 1.0   how dark the lines are (1 = black)
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float line_strength <
+    string label = "Line Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0; // 0.0 – 5.0   edge amplification
+
+uniform float paper_brightness <
+    string label = "Paper Brightness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.95; // 0.0 – 1.0   base paper whiteness
+
+uniform float line_darkness <
+    string label = "Line Darkness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.85; // 0.0 – 1.0   how dark the lines are (1 = black)
 
 uniform float2    uv_pixel_interval;
 uniform texture2d image;
@@ -25,7 +48,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -70,7 +93,7 @@ float4 mainImage(VertData v_in) : TARGET
 
     // Preserve source alpha.
     float4 src = image.Sample(textureSampler, uv);
-    return float4(col, src.a);
+    return float4(saturate(col), src.a);
 }
 
 technique Draw
