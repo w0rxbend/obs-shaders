@@ -5,10 +5,38 @@
 // Use case: Brightens shadows, reduces noise, adds warmth — simulates AI-enhanced low-light camera
 // Chain order: Apply before color grading; first corrective pass in chain
 
-uniform float lift             = 0.15; // 0.0 – 0.5  (shadow lift)
-uniform float gamma            = 0.65; // 0.3 – 2.0  (< 1 brightens)
-uniform float warmth           = 0.12; // 0.0 – 0.5  (warm tint strength)
-uniform float denoise_strength = 0.4;  // 0.0 – 1.0
+uniform float lift <
+    string label = "Shadow Lift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.15;
+
+uniform float gamma <
+    string label = "Gamma";
+    string widget_type = "slider";
+    float minimum = 0.3;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float warmth <
+    string label = "Warmth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.12;
+
+uniform float denoise_strength <
+    string label = "Denoise";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
 uniform float2 uv_pixel_interval;
 
 uniform texture2d image;
@@ -42,7 +70,7 @@ float4 mainImage(VertData v_in) : TARGET
 
     // --- Shadow lift: raise dark values ---
     // lift shifts the entire range up; then rescale to keep whites at 1.
-    rgb = (rgb + lift) / (1.0 + lift);
+    rgb = (rgb + lift) / max(1.0 + lift, 0.001);
 
     // --- Gamma brighten: exponent < 1 brightens midtones ---
     float g = max(gamma, 0.01);
@@ -53,5 +81,5 @@ float4 mainImage(VertData v_in) : TARGET
     rgb.g = saturate(rgb.g + warmth * 0.15);
     rgb.b = saturate(rgb.b - warmth * 0.3);
 
-    return float4(saturate(rgb), denoised.a);
+    return float4(saturate(rgb), col.a);
 }
