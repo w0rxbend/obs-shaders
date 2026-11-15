@@ -6,12 +6,35 @@
 // Chain order: Apply before compositing; pairs well with film-grain or digital-noise
 
 uniform float4x4 ViewProj;
-uniform float melt_strength = 0.12;  // 0.0–0.3
-uniform float melt_scale    = 4.0;   // 1.0–10.0
-uniform float speed         = 0.8;   // 0.0–3.0
+uniform texture2d image;
+
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float elapsed_time;
 
-uniform texture2d image;
+uniform float melt_strength <
+    string label = "Melt Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.12;
+
+uniform float melt_scale <
+    string label = "Melt Scale";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 10.0;
+    float step = 0.1;
+> = 4.0;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.8;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -24,12 +47,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -72,9 +94,10 @@ float4 mainImage(VertData v_in) : TARGET
     drip += ripple;
 
     // Shift UV downward (positive Y = down in OBS)
-    float2 sampleUV = clamp(uv + float2(0.0, drip), 0.0, 1.0);
+    float2 sampleUV = saturate(uv + float2(0.0, drip));
 
-    return image.Sample(textureSampler, sampleUV);
+    float4 color = image.Sample(textureSampler, sampleUV);
+    return float4(saturate(color.rgb), color.a);
 }
 
 technique Draw
