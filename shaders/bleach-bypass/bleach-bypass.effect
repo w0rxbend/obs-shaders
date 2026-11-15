@@ -6,11 +6,33 @@
 // Chain order: early in chain; stack before grain for authentic look
 
 uniform float4x4 ViewProj;
-uniform float strength       = 0.7; // 0.0 – 1.0
-uniform float contrast_boost = 0.4; // 0.0 – 1.0
-uniform float desat          = 0.5; // 0.0 – 1.0
-
 uniform texture2d image;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float contrast_boost <
+    string label = "Contrast Boost";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float desat <
+    string label = "Desaturation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -23,12 +45,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -58,8 +79,8 @@ float4 mainImage(VertData v_in) : TARGET
     float shadowMask = 1.0 - smoothstep(0.0, 0.45, lum);
     contrasted += shadow_lift * shadowMask * strength;
 
-    float3 result = clamp(contrasted, 0.0, 1.0);
-    return float4(result, col.a);
+    float3 graded = saturate(contrasted);
+    return float4(graded, col.a);
 }
 
 technique Draw
