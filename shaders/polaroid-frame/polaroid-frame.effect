@@ -6,10 +6,41 @@
 // Chain order: Apply after color grading; keep as outermost frame layer
 
 uniform float4x4 ViewProj;
-uniform float border_top    = 0.04; // 0.0 – 0.1
-uniform float border_sides  = 0.04; // 0.0 – 0.1
-uniform float border_bottom = 0.12; // 0.0 – 0.2
-uniform float warmth        = 0.05; // 0.0 – 0.3  (yellow-warm tint on the white border)
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float border_top <
+    string label = "Border top";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.04;
+
+uniform float border_sides <
+    string label = "Border sides";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.04;
+
+uniform float border_bottom <
+    string label = "Border bottom";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.001;
+> = 0.12;
+
+uniform float warmth <
+    string label = "Warmth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.05;
 
 uniform texture2d image;
 
@@ -28,39 +59,34 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
+    // Side margin is a fraction of frame height so top and sides match in pixels.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float side = border_sides / max(aspect, 0.001);
 
-    // Determine which region we're in
-    bool in_left   = (uv.x < border_sides);
-    bool in_right  = (uv.x > 1.0 - border_sides);
-    bool in_top    = (uv.y < border_top);
-    bool in_bottom = (uv.y > 1.0 - border_bottom);
+    bool in_border = uv.x < side
+        || uv.x > 1.0 - side
+        || uv.y < border_top
+        || uv.y > 1.0 - border_bottom;
 
-    bool in_border = in_left || in_right || in_top || in_bottom;
+    float inner_width = max(1.0 - side * 2.0, 0.001);
+    float inner_height = max(1.0 - border_top - border_bottom, 0.001);
+    float2 photo_uv = saturate(float2(
+        (uv.x - side) / inner_width,
+        (uv.y - border_top) / inner_height));
+    float2 sample_uv = in_border ? saturate(uv) : photo_uv;
 
+    float4 col = image.Sample(textureSampler, sample_uv);
     if (in_border)
     {
-        // Warm white Polaroid border
-        float3 border_col = float3(1.0 + warmth * 0.2, 1.0, 1.0 - warmth);
-        // Clamp to valid range
-        border_col = clamp(border_col, 0.0, 1.0);
-        return float4(border_col, 1.0);
+        col.rgb = saturate(float3(1.0 + warmth * 0.2, 1.0, 1.0 - warmth));
     }
-
-    // Map UVs to inner image area
-    float inner_u = (uv.x - border_sides)  / max(1.0 - border_sides  * 2.0, 0.001);
-    float inner_v = (uv.y - border_top)    / max(1.0 - border_top - border_bottom, 0.001);
-
-    inner_u = clamp(inner_u, 0.0, 1.0);
-    inner_v = clamp(inner_v, 0.0, 1.0);
-
-    float4 col = image.Sample(textureSampler, float2(inner_u, inner_v));
     return col;
 }
 
