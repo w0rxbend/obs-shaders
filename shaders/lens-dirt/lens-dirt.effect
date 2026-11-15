@@ -2,10 +2,24 @@
 // Strength: controls how dark the dirt patches get (0.0 = invisible, 1.0 = full black)
 // Scale:    controls the size of the noise pattern (higher = smaller patches)
 
-uniform float strength = 0.7;
-uniform float scale = 20.0;
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float scale <
+    string label = "Scale";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 60.0;
+    float step = 0.1;
+> = 20.0;
 
 uniform texture2d image;
+uniform float2 uv_size;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -50,19 +64,25 @@ float4 mainImage(VertData v_in) : TARGET
 
     float4 col = image.Sample(textureSampler, uv);
 
+    // Isotropic dust. uv_size keeps patches from stretching on wide frames.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 p = float2(uv.x * aspect, uv.y) * scale;
+
     // Fractal noise: 3 octaves for organic-looking dirt
-    float dirt = noise(uv * scale);
-    dirt += noise(uv * scale * 2.5) * 0.5;
-    dirt += noise(uv * scale * 5.0) * 0.25;
-    dirt /= 1.75;
+    float dirt = noise(p);
+    dirt += noise(p * 2.5) * 0.5;
+    dirt += noise(p * 5.0) * 0.25;
+    dirt /= max(1.75, 0.001);
 
     float mask = smoothstep(0.45, 0.85, dirt);
 
-    col.rgb *= lerp(1.0 - strength, 1.0, mask);
+    // Darken dirt peaks only. Clean pixels stay at source brightness.
+    col.rgb *= 1.0 - strength * mask;
 
     // Slight desaturation in dirt areas for a more realistic look
     float lum = dot(col.rgb, float3(0.299, 0.587, 0.114));
-    col.rgb = lerp(float3(lum, lum, lum), col.rgb, 0.7);
+    float3 gray = float3(lum, lum, lum);
+    col.rgb = lerp(col.rgb, gray, mask * 0.3);
 
-    return col;
+    return float4(saturate(col.rgb), col.a);
 }
