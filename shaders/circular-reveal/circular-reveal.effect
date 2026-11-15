@@ -7,10 +7,42 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float progress   = 0.5;   // 0.0 = fully hidden, 1.0 = fully revealed
-uniform float softness   = 0.02;  // 0.0–0.1 edge feather
-uniform float center_x   = 0.5;   // horizontal center of iris
-uniform float center_y   = 0.5;   // vertical center of iris
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+// Mid-open so a talking head stays recognizable. 0 hides, 1 clears the frame.
+uniform float progress <
+    string label = "Progress";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.02;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -27,27 +59,27 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv     = v_in.uv;
-    float4 color  = image.Sample(textureSampler, uv);
+    float2 uv = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
 
-    // Vector from center to current pixel (corrected for aspect via uv space)
-    float2 delta  = uv - float2(center_x, center_y);
-    // Use uniform aspect — works for any source since uv is 0-1
-    float dist    = length(delta);
+    // Height-fraction space so the iris is a circle on non-square frames.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 center = float2(center_x, center_y);
+    float dist = length((uv - center) * float2(aspect, 1.0));
+    float far_x = max(center.x, 1.0 - center.x);
+    float far_y = max(center.y, 1.0 - center.y);
+    float cover = length(float2(far_x * aspect, far_y));
+    float feather = max(softness, 0.001);
+    float radius = lerp(-feather, cover + feather, saturate(progress));
+    float visible = 1.0 - smoothstep(radius - feather, radius + feather, dist);
 
-    // radius goes from 0 (nothing visible) to ~0.8 (covers corners at 0.5,0.5)
-    float maxR    = 0.7072; // half-diagonal of unit square
-    float radius  = progress * maxR;
-
-    float alpha   = 1.0 - smoothstep(radius - softness, radius + softness, dist);
-
-    color.a      *= alpha;
+    color.rgb *= visible;
     return color;
 }
 
