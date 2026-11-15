@@ -4,12 +4,41 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
-uniform float    elapsed_time;
+uniform float elapsed_time;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 
-uniform float strength    = 0.85;
-uniform float softness    = 0.4;
-uniform float pulse_speed = 0.5;
-uniform float pulse_depth = 0.1;
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float pulse_speed <
+    string label = "Pulse Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float pulse_depth <
+    string label = "Pulse Depth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.1;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,11 +55,10 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-// Simple 1D hash for flicker
 float hash1(float t)
 {
     return frac(sin(t * 127.1) * 43758.5453);
@@ -38,33 +66,29 @@ float hash1(float t)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv  = v_in.uv;
+    float2 uv = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    // Distance from centre, shaped for vignette
-    float2 centered = (uv - 0.5) * 2.0;  // -1..1 range
-    float  dist     = length(centered);
+    float2 centered = (uv - 0.5) * 2.0;
+    float dist = length(centered);
+    float innerRadius = 1.0 - softness;
+    float outerRadius = max(length(float2(1.0, 1.0)), innerRadius + 0.001);
+    float rim = smoothstep(innerRadius, outerRadius, dist);
 
-    // Soften the vignette edge: inner radius controlled by softness
-    float innerRadius = 1.0 - softness;             // how far center is clear
-    float vigRaw      = smoothstep(innerRadius, 1.8, dist);
-
-    // Slow pulse: sin oscillation ±pulse_depth on vignette strength
     float pulse = sin(elapsed_time * pulse_speed * 3.14159 * 2.0) * 0.5 + 0.5;
-    float pulsedStrength = strength + pulse * pulse_depth - pulse_depth * 0.5;
+    float pulsedStrength = strength + (pulse - 0.5) * pulse_depth;
 
-    // Occasional flicker: random very-short brightening (~2 Hz flicker rate)
-    float flickerTime = floor(elapsed_time * 18.0); // 18 fps flicker resolution
-    float flicker     = hash1(flickerTime);
-    // Most frames flicker = near 0 (no change); rarely it spikes up briefly
-    float flickerMask = step(0.93, flicker) * 0.15; // 7% of frames, reduce vignette
-    pulsedStrength    = saturate(pulsedStrength - flickerMask);
+    // Short edge lift on about 7% of the 18 Hz steps. Center stays put.
+    float flickerTime = floor(elapsed_time * 18.0);
+    float flicker = hash1(flickerTime);
+    float flickerMask = step(0.93, flicker) * 0.15;
+    pulsedStrength = saturate(pulsedStrength - flickerMask);
 
-    // Apply: vignette darkens toward pure black at edges
-    float vigAmount = vigRaw * pulsedStrength;
-    float3 result   = col.rgb * (1.0 - vigAmount);
+    float vigAmount = saturate(rim * pulsedStrength);
+    float shade = 1.0 - vigAmount;
+    float3 rgb = saturate(col.rgb * shade * shade);
 
-    return float4(saturate(result), col.a);
+    return float4(rgb, col.a);
 }
 
 technique Draw
