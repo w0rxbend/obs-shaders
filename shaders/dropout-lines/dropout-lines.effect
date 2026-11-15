@@ -6,9 +6,29 @@
 // Chain order: apply near end of chain, after all warping/color effects
 
 uniform float4x4 ViewProj;
-uniform float dropout_amount = 0.08;  // 0.0 – 0.3    fraction of lines that can drop out
-uniform float dropout_speed  = 4.0;   // 0.5 – 10.0   animation speed
-uniform bool  white_dropout  = false; // false=black, true=white dropouts
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+// 0.0 – 0.3 fraction of lines that can drop out
+uniform float dropout_amount <
+    string label = "Dropout Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.08;
+
+// 0.5 – 10.0 animation speed
+uniform float dropout_speed <
+    string label = "Dropout Speed";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 10.0;
+    float step = 0.01;
+> = 4.0;
+
+// false=black, true=white dropouts
+uniform bool white_dropout = false;
 
 uniform texture2d image;
 uniform float elapsed_time;
@@ -30,13 +50,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float Hash11(float x)
-{
-    return frac(sin(x * 127.1) * 43758.5453);
 }
 
 float Hash21(float2 p)
@@ -51,7 +66,7 @@ float4 mainImage(VertData v_in) : TARGET
     float4 col = image.Sample(textureSampler, uv);
 
     // Compute line identity
-    float lineF  = uv.y / uv_pixel_interval.y;
+    float lineF  = uv.y / max(uv_pixel_interval.y, 0.001);
     float lineId = floor(lineF);
 
     // Time seed: update at dropout_speed rate, introduce coarse frame quantization
