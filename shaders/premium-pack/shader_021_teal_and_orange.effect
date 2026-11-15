@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.93;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,13 +98,6 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
@@ -75,21 +111,32 @@ float alphaOut(float sampled_alpha)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float gray = luma3(color.rgb);
-    float3 tint = float3(0.100, 0.500, 0.620);
-    float3 warm = float3(1.05, 0.88 + 1 * 0.03, 0.72);
-    float3 cool = float3(0.70, 0.88, 1.12);
-    float vignette = smoothstep(0.88, 0.18, length((uv - float2(center_x, center_y)) * float2(1.15, 1.0)));
-    float grain = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.55) + floor(elapsed_time * speed * 18.0)) - 0.5;
-    float3 graded = lerp(color.rgb, float3(gray, gray, gray), 0.12 + 0.18 * amount);
-    graded = (graded - 0.5) * (1.0 + 0.45 * intensity) + 0.5;
-    graded *= lerp(cool, warm, saturate(tint.r + 0.25));
-    graded = lerp(graded, tint * (0.25 + gray * 0.95), 0.20 * intensity);
-    graded *= 0.72 + vignette * 0.38;
-    graded += grain * 0.045 * intensity;
-    return float4(saturate(graded), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, float2(0.0, 0.0), float2(1.0, 1.0));
+    float4 source = image.Sample(textureSampler, uv);
+    float luma = luma3(source.rgb);
+    float grade = amount * intensity;
+    float contrast = 1.0 + 0.18 * saturate(grade);
+    float3 shaped = (source.rgb - 0.5) * contrast + 0.5;
+
+    float shadow_w = 1.0 - smoothstep(0.0, 0.55, luma);
+    float highlight_w = smoothstep(0.28, 0.92, luma);
+    float3 teal = float3(0.12, 0.62, 0.68);
+    float3 orange = float3(1.0, 0.58, 0.22);
+    float3 graded = shaped;
+    graded = lerp(graded, graded * teal * 1.45, saturate(shadow_w * grade * 0.55));
+    graded = lerp(graded, graded * orange * 1.12, saturate(highlight_w * grade * 0.62));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float vignette = smoothstep(1.35, 0.40, length(from_center));
+    graded *= lerp(1.0 - 0.18 * saturate(grade), 1.0, vignette);
+
+    float2 grain_cell = floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.5);
+    float grain_tick = floor(elapsed_time * speed * 6.0);
+    float grain = hash12(grain_cell + float2(grain_tick, grain_tick * 0.37)) - 0.5;
+    graded += grain * 0.028 * saturate(grade);
+
+    return float4(saturate(graded), alphaOut(source.a));
 }
 
 technique Draw
