@@ -1,27 +1,70 @@
 // Filename: shader_005_redacted_document_look.effect
 // Category: Confidential / privacy pack
 // Effect: Redacted document look
-// Visual principle: large-kernel signal destruction with pixel quantization and procedural privacy noise.
+// Visual principle: flatten the frame into a coarse photocopy, then cover lines with solid black marker bars.
 // What makes it cool: it hides readable details but leaves the audience aware that real content exists underneath.
 // Suggested source type: screen capture, browser source, IDEs, dashboards, documents
 // Suggested shader-chain combinations: soft vignette -> this shader -> subtle noise or scanline overlay
-// Performance cost: medium
+// Performance cost: low
 // Alpha safe: no
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.85;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -53,13 +96,6 @@ float hash12(float2 p)
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -77,25 +113,43 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
-    float2 pixels = max(float2(1.0, 1.0), uv_size);
-    float block = lerp(12.0, 42.0, saturate(amount * 0.7));
-    float2 cells = max(float2(1.0, 1.0), pixels / block);
-    float2 puv = (floor(uv * cells) + 0.5) / cells;
-    float2 px = uv_pixel_interval * (8.0 + amount * 24.0);
-    float4 blur = image.Sample(textureSampler, puv) * 0.36;
-    blur += image.Sample(textureSampler, clamp(puv + float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv + float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    float grain = hash12(floor(uv * pixels / max(2.0, block * 0.35)) + floor(elapsed_time * speed * 12.0));
-    float gray = luma3(blur.rgb);
-    float3 tint = float3(0.850, 0.880, 0.900);
-    float3 protected_rgb = lerp(blur.rgb, tint * (0.45 + gray * 0.55), 0.35 * intensity);
-    protected_rgb = lerp(protected_rgb, float3(gray, gray, gray), 0.35);
-    protected_rgb += (grain - 0.5) * 0.22 * intensity;
-    protected_rgb *= 1.0 - 0.20 * saturate(intensity);
-    float blend = saturate(0.82 + amount * 0.16);
-    float3 out_rgb = lerp(color.rgb, protected_rgb, blend);
+
+    float amount_norm = saturate(amount);
+    float bar_strength = saturate(intensity);
+    float2 pixels = max(uv_size, float2(1.0, 1.0));
+    float block = max(lerp(6.0, 34.0, amount_norm), 0.001);
+    float2 cells = max(pixels / block, float2(1.0, 1.0));
+    float2 cell_uv = (floor(uv * cells) + 0.5) / max(cells, float2(0.001, 0.001));
+    cell_uv = clamp(cell_uv, 0.0, 1.0);
+    float4 page = image.Sample(textureSampler, cell_uv);
+
+    float gray = luma3(page.rgb);
+    float tone = saturate((gray - 0.08) * (1.1 + 0.45 * bar_strength));
+    float3 paper = lerp(float3(0.17, 0.16, 0.14), float3(0.93, 0.91, 0.86), tone);
+
+    // Reshuffle stays under 3 Hz so the bars do not strobe on stream.
+    float phase_hz = min(max(speed, 0.0) * 0.15, 2.5);
+    float phase = floor(elapsed_time * phase_hz);
+
+    float line_count = lerp(8.0, 18.0, amount_norm);
+    float row_pos = (uv.y + (center_y - 0.5)) * line_count;
+    float row = floor(row_pos);
+    float along_row = frac(row_pos);
+    float half_span = saturate(0.16 + 0.18 * intensity);
+    float in_stroke = step(abs(along_row - 0.5), half_span);
+
+    float col_count = lerp(3.0, 7.0, amount_norm);
+    float col = floor((uv.x + (center_x - 0.5)) * col_count);
+    float row_on = step(lerp(0.72, 0.40, amount_norm), hash12(float2(row, phase)));
+    float segment_on = step(0.30, hash12(float2(row * 19.0 + col, phase + 4.0)));
+    float redaction = row_on * in_stroke * segment_on * bar_strength;
+
+    float3 marked = lerp(paper, float3(0.03, 0.03, 0.035), redaction);
+    float grain = hash12(floor(uv * cells) + phase) - 0.5;
+    marked += grain * 0.028 * bar_strength;
+
+    float cover = smoothstep(0.05, 0.75, amount);
+    float3 out_rgb = lerp(color.rgb, marked, cover);
     return float4(saturate(out_rgb), alphaOut(color.a));
 }
 
