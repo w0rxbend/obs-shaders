@@ -3,10 +3,23 @@
 // k1 : second-order coefficient  (-1.0–1.0, default  0.3)
 // k2 : fourth-order coefficient  (-0.5–0.5, default  0.05)
 
-uniform float k1 = 0.3;
-uniform float k2 = 0.05;
+uniform float k1 <
+    string label = "Second order";
+    string widget_type = "slider";
+    float minimum = -1.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+uniform float k2 <
+    string label = "Fourth order";
+    string widget_type = "slider";
+    float minimum = -0.5;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.05;
 
 uniform texture2d image;
+uniform float2 uv_size;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -23,14 +36,17 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Center in [-1, 1]
-    float2 p  = uv * 2.0 - 1.0;
+    // Center in [-1, 1], stretch x so the bulge is circular on screen.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 p = uv * 2.0 - 1.0;
+    p.x *= aspect;
     float  r2 = dot(p, p);          // r^2
     float  r4 = r2 * r2;            // r^4
 
     // r' = r * (1 + k1*r^2 + k2*r^4)  applied to the direction vector
     float scale = 1.0 + k1 * r2 + k2 * r4;
     float2 pWarp = p * scale;
+    pWarp.x /= max(aspect, 0.001);
 
     float2 uvWarp = saturate((pWarp + 1.0) * 0.5);
 
