@@ -8,10 +8,30 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float    elapsed_time;
+uniform float2   uv_offset;
+uniform float2   uv_scale;
 
-uniform float cycle_speed      = 0.8;  // 0.0–5.0  — full hue cycle per N seconds
-uniform float saturation_boost = 1.8;  // 0.5–3.0
-uniform float wave_distortion  = 0.006; // 0.0–0.02
+uniform float cycle_speed <
+    string label = "Cycle Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 0.8;
+uniform float saturation_boost <
+    string label = "Saturation Boost";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.8;
+uniform float wave_distortion <
+    string label = "Wave Distortion";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.02;
+    float step = 0.001;
+> = 0.006;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -28,7 +48,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -39,8 +59,7 @@ float3 rgb2hsv(float3 c)
     float4 p = (c.g < c.b) ? float4(c.bg, K.wz) : float4(c.gb, K.xy);
     float4 q = (c.r < p.x) ? float4(p.xyw, c.r) : float4(c.r, p.yzx);
     float d  = q.x - min(q.w, q.y);
-    float e  = 1.0e-10;
-    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+    return float3(abs(q.z + (q.w - q.y) / max(6.0 * d, 0.001)), d / max(q.x, 0.001), q.x);
 }
 
 float3 hsv2rgb(float3 c)
