@@ -1,27 +1,65 @@
 // Filename: shader_083_pixel_melt.effect
 // Category: Experimental art pack
 // Effect: Pixel melt
-// Visual principle: stylized color quantization, edge emphasis, pattern overlays, and painterly sampling.
-// What makes it cool: it makes live footage look intentionally illustrated instead of merely filtered.
+// Visual principle: coarse pixel blocks drip downward in slow columns, weaker on the subject.
+// What makes it cool: live footage melts like hot pixels while a talking head stays recognizable.
 // Suggested source type: webcam, image source, video source, VJ visuals
 // Suggested shader-chain combinations: this shader -> posterize or halftone -> light vignette
-// Performance cost: medium
+// Performance cost: low
 // Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.09;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.73;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +77,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,46 +88,47 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 px = uv_pixel_interval * (1.0 + amount * 2.0);
-    float4 c = color;
-    float4 cx = image.Sample(textureSampler, clamp(uv + float2(px.x, 0.0), 0.0, 1.0));
-    float4 cy = image.Sample(textureSampler, clamp(uv + float2(0.0, px.y), 0.0, 1.0));
-    float edge = length(c.rgb - cx.rgb) + length(c.rgb - cy.rgb);
-    float levels = 4.0 + floor(amount * 5.0);
-    float3 quant = floor(c.rgb * levels) / levels;
-    float dots = step(0.48, frac((uv.x + uv.y + sin(elapsed_time * speed) * 0.03) * uv_size.x / (10.0 + amount * 10.0)));
-    float gray = luma3(quant);
-    float3 ink = lerp(quant, float3(0.850, 0.300, 1.000) * (0.25 + gray), 0.22 * intensity);
-    ink = lerp(ink, float3(0.02, 0.02, 0.025), saturate(edge * 2.5 * intensity));
-    ink += dots * 0.035 * intensity;
-    return float4(saturate(ink), alphaOut(c.a));
+    float4 source = image.Sample(textureSampler, clamp(uv, 0.0, 1.0));
+
+    // Defaults sit near 1. A few blocks of drip keeps the face readable.
+    float2 block_uv = max(uv_pixel_interval * (4.0 + amount * 4.0), float2(0.001, 0.001));
+    float2 snapped = (floor(uv / block_uv) + 0.5) * block_uv;
+    float column = floor(uv.x / max(block_uv.x, 0.001));
+    float column_n = hash12(float2(column, 1.0));
+
+    // One sine turn. Wrapping the phase keeps a long stream from stepping the drip.
+    float turn = 6.28318530718;
+    float phase = fmod(elapsed_time * speed, turn);
+    float wave = 0.65 + 0.35 * sin(phase + column_n * turn);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = snapped - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float edge = saturate(length(from_center) / max(0.72, 0.001));
+    float gravity = saturate((snapped.y - center_y + 0.2) / max(0.8, 0.001));
+    float falloff = saturate(edge * 0.65 + gravity * 0.35);
+    float blocks_down = wave * intensity * (0.55 + 0.35 * amount) * lerp(0.55, 1.15, falloff);
+
+    float2 melted_uv = clamp(snapped + float2(0.0, blocks_down * block_uv.y), 0.0, 1.0);
+    float4 melted = image.Sample(textureSampler, melted_uv);
+
+    float mix_weight = saturate(opacity);
+    float3 rgb = lerp(source.rgb, saturate(melted.rgb), mix_weight);
+    float sampled_alpha = lerp(source.a, melted.a, mix_weight);
+    return float4(rgb, alphaOut(sampled_alpha));
 }
 
 technique Draw
