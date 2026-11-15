@@ -7,9 +7,33 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float progress  = 0.5;  // 0.0 = fully hidden, 1.0 = fully revealed
-uniform float ink_scale = 2.0;  // 1.0–5.0 noise frequency of blob edges
-uniform float softness  = 0.03; // 0.0–0.1 edge feather
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float progress <
+    string label = "Progress";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float ink_scale <
+    string label = "Ink Scale";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0;
+
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.03;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,7 +50,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -47,7 +71,6 @@ float noise2d(float2 p)
     return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
-// Three-octave fbm for organic shape
 float fbm(float2 p)
 {
     float v = 0.0;
@@ -60,24 +83,26 @@ float fbm(float2 p)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv   = v_in.uv;
+    float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
 
-    // Distance from center
-    float2 delta = uv - float2(0.5, 0.5);
-    float  dist  = length(delta);
+    // Height units keep the blot round on widescreen.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - float2(0.5, 0.5)) * float2(aspect, 1.0);
+    float dist = length(from_center);
 
-    // Noise warps the blob boundary organically
-    float  n     = fbm(uv * ink_scale + float2(2.3, 5.7));
+    float n = fbm(from_center * ink_scale + float2(2.3, 5.7));
+    float cover = 0.5 * length(float2(aspect, 1.0));
+    // Extra radius so progress 1 clears noise and the soft edge.
+    float blob_radius = progress * (cover + 0.25);
+    float edge = max(softness, 0.001);
+    float wobble = (n - 0.5) * 0.22 * saturate(progress);
+    float reach = blob_radius + wobble;
+    float reveal = 1.0 - smoothstep(reach - edge, reach + edge, dist);
 
-    // Effective "distance" is dist minus organic perturbation
-    float  blobR = progress * 0.8; // max radius scaled to ~cover image
-    float  eff   = dist - n * 0.2; // noise punches inward
-
-    float  alpha = 1.0 - smoothstep(blobR - softness, blobR + softness, eff);
-
-    color.a     *= alpha;
-    return color;
+    float3 ink = float3(0.02, 0.015, 0.03);
+    float3 rgb = saturate(lerp(ink, color.rgb, reveal));
+    return float4(rgb, color.a);
 }
 
 technique Draw
