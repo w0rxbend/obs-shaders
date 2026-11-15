@@ -7,12 +7,41 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
-uniform float    elapsed_time;
+uniform float elapsed_time;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 
-uniform float saturation = 2.5;  // 1.0–4.0
-uniform float chroma     = 0.008; // 0.0–0.02
-uniform float noise      = 0.08;  // 0.0–0.2
-uniform float warp       = 0.005; // 0.0–0.015
+uniform float saturation <
+    string label = "Saturation";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 2.5;
+
+uniform float chroma <
+    string label = "Chroma";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.02;
+    float step = 0.001;
+> = 0.008;
+
+uniform float noise <
+    string label = "Noise";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.08;
+
+uniform float warp <
+    string label = "Warp";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.015;
+    float step = 0.001;
+> = 0.005;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -29,25 +58,13 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float hash21(float2 p)
 {
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
-}
-
-float noise1(float2 p)
-{
-    float2 i = floor(p);
-    float2 f = frac(p);
-    float2 u = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + float2(1.0, 0.0));
-    float c = hash21(i + float2(0.0, 1.0));
-    float d = hash21(i + float2(1.0, 1.0));
-    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
 float4 mainImage(VertData v_in) : TARGET
@@ -71,7 +88,7 @@ float4 mainImage(VertData v_in) : TARGET
     col.rgb    = saturate(col.rgb);
 
     // Scan noise lines — horizontal band noise at video frequency
-    float scanLine  = floor(uv.y * 480.0);    // 480p grid
+    float scanLine  = floor(uv.y * 480.0);
     float t         = floor(elapsed_time * 30.0);
     float lineNoise = hash21(float2(scanLine, t)) - 0.5;
     float noiseMask = step(0.93, hash21(float2(scanLine * 0.1, t * 0.7))); // sparse lines
