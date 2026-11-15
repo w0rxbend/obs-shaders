@@ -11,17 +11,61 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.09;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.19;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -48,18 +92,6 @@ float hash12(float2 p)
     float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -76,24 +108,33 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
-    float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
-    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
-    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
-    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
-    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
-    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
-    float rch = image.Sample(textureSampler, uv_r).r;
-    float gch = image.Sample(textureSampler, uv_g).g;
-    float bch = image.Sample(textureSampler, uv_b).b;
-    float noise = hash12(floor(uv * uv_size / 3.0) + floor(t * 20.0)) - 0.5;
-    float3 tint = float3(0.900, 0.200, 0.180);
-    float3 out_rgb = float3(rch, gch, bch) * scan;
-    out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
-    out_rgb += noise * 0.08 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float4 source = image.Sample(textureSampler, uv);
+    // 1024 * 3 * pi is a whole turn, so the comb does not pop on a long stream.
+    float t = fmod(elapsed_time * speed, 1024.0);
+    float row = uv.y * max(uv_size.y, 1.0) + (center_y - 0.5) * 8.0 + 64.0;
+    float odd = fmod(floor(row), 2.0);
+    float aim = (center_x - 0.5) * 0.012 * amount;
+    float comb = (odd * 2.0 - 1.0) * sin(t * 3.14159265 * 3.0) * 6.0 * uv_pixel_interval.x * amount;
+    float band = floor(uv.y * 18.0 + (center_y - 0.5) * 4.0);
+    float tear_tick = floor(t * 1.0);
+    float tear_roll = hash12(float2(band, tear_tick));
+    float tear_on = step(0.72, tear_roll);
+    float tear = (hash12(float2(band, tear_tick + 9.0)) - 0.5) * 0.008 * amount * tear_on;
+    float shift = comb + tear + aim;
+    float chroma = sin(t * 3.14159265) * 2.5 * uv_pixel_interval.x * amount;
+    float2 uv_g = clamp(uv + float2(shift, 0.0), 0.0, 1.0);
+    float2 uv_r = clamp(uv + float2(shift + chroma, 0.0), 0.0, 1.0);
+    float2 uv_b = clamp(uv + float2(shift - chroma * 0.65, 0.0), 0.0, 1.0);
+    float3 rgb = float3(
+        image.Sample(textureSampler, uv_r).r,
+        image.Sample(textureSampler, uv_g).g,
+        image.Sample(textureSampler, uv_b).b);
+    float line_strength = saturate(intensity * 0.55);
+    rgb *= lerp(1.0, 0.52, odd * line_strength);
+    float grain_tick = floor(t * 2.0);
+    float grain = hash12(floor(float2(uv.x * max(uv_size.x, 1.0), row) / 3.0) + grain_tick) - 0.5;
+    rgb += grain * 0.04 * intensity;
+    return float4(saturate(rgb), alphaOut(source.a));
 }
 
 technique Draw
