@@ -6,9 +6,27 @@
 // Chain order: Early in chain; combine with color grade after
 
 uniform float4x4 ViewProj;
-uniform float axis      = 0.0;   // 0.0 = horizontal, 1.0 = vertical
-uniform bool  flip_side = false; // which half is the source
-uniform float blend     = 1.0;   // 0.0–1.0 crossfade between original and mirrored
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+// 0 = horizontal split, 1 = vertical split.
+uniform float axis <
+    string label = "Axis";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 1.0;
+> = 0.0;
+
+uniform bool flip_side = false; // which half is the source
+
+uniform float blend <
+    string label = "Blend";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 
 uniform texture2d image;
 
@@ -23,55 +41,33 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
+    float4 source = image.Sample(textureSampler, uv);
 
-    // Original color for blend
-    float4 orig = image.Sample(textureSampler, uv);
+    // Low half is the source unless flip_side keeps the high half instead.
+    float split_coord = (axis < 0.5) ? uv.y : uv.x;
+    bool copy_from_other = flip_side ? (split_coord < 0.5) : (split_coord > 0.5);
+    float mirrored_coord = copy_from_other ? (1.0 - split_coord) : split_coord;
 
-    float2 mirrorUV = uv;
-
+    float2 mirror_uv = uv;
     if (axis < 0.5)
-    {
-        // Horizontal split — mirror across y = 0.5
-        float srcY = flip_side ? (1.0 - uv.y) : uv.y;
-        float pivot = 0.5;
-        if (srcY > pivot)
-            mirrorUV.y = 2.0 * pivot - uv.y;
-        else
-            mirrorUV.y = uv.y;
-
-        if (flip_side)
-            mirrorUV.y = 1.0 - mirrorUV.y;
-    }
+        mirror_uv.y = mirrored_coord;
     else
-    {
-        // Vertical split — mirror across x = 0.5
-        float srcX = flip_side ? (1.0 - uv.x) : uv.x;
-        float pivot = 0.5;
-        if (srcX > pivot)
-            mirrorUV.x = 2.0 * pivot - uv.x;
-        else
-            mirrorUV.x = uv.x;
+        mirror_uv.x = mirrored_coord;
 
-        if (flip_side)
-            mirrorUV.x = 1.0 - mirrorUV.x;
-    }
-
-    mirrorUV = clamp(mirrorUV, 0.0, 1.0);
-    float4 mirrored = image.Sample(textureSampler, mirrorUV);
-
-    return lerp(orig, mirrored, clamp(blend, 0.0, 1.0));
+    mirror_uv = clamp(mirror_uv, 0.0, 1.0);
+    float4 mirrored = image.Sample(textureSampler, mirror_uv);
+    return lerp(source, mirrored, clamp(blend, 0.0, 1.0));
 }
 
 technique Draw
