@@ -7,11 +7,42 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
 uniform float elapsed_time;
-uniform float wave_count     = 3.0;   // 1.0–5.0
-uniform float wave_speed     = 2.0;   // 0.5–5.0
-uniform float distortion     = 0.012; // 0.0–0.03
-uniform float tint_strength  = 0.2;   // 0.0–0.5
+
+uniform float wave_count <
+    string label = "Wave Count";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 5.0;
+    float step = 1.0;
+> = 3.0;
+
+uniform float wave_speed <
+    string label = "Wave Speed";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0;
+
+uniform float distortion <
+    string label = "Distortion";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.03;
+    float step = 0.001;
+> = 0.012;
+
+uniform float tint_strength <
+    string label = "Tint Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.2;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -28,54 +59,50 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    // Map uv to centered coordinates
+    // Height-normalized so concentric rings stay circular on widescreen.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 centered = uv - 0.5;
-    float  dist     = length(centered);
+    float2 centered_screen = float2(centered.x * aspect, centered.y);
+    float dist = length(centered_screen);
+    float2 dir_screen = centered_screen / max(dist, 0.001);
+    float2 dir = float2(dir_screen.x / max(aspect, 0.001), dir_screen.y);
 
-    // --- Multiple concentric wave distortions ---
     float2 disp = float2(0.0, 0.0);
-    float  peak_sum = 0.0;
+    float peak_sum = 0.0;
 
-    for (float i = 0.0; i < 5.0; i++)
+    for (int i = 0; i < 5; i++)
     {
-        if (i >= wave_count) break;
+        float band = (float)i;
+        if (band >= wave_count)
+            break;
 
-        float freq   = 8.0 + i * 5.5;
-        float speed  = wave_speed * (1.0 + i * 0.3);
-        float phase  = dist * freq - elapsed_time * speed + i * 1.256;
-        float wave   = sin(phase);
+        float freq = 8.0 + band * 5.5;
+        float speed = wave_speed * (1.0 + band * 0.3);
+        float phase = dist * freq - elapsed_time * speed + band * 1.256;
+        float wave = sin(phase);
 
-        // Displacement direction: radially outward
-        float2 dir = (dist > 0.001) ? (centered / dist) : float2(0.0, 1.0);
-        disp      += dir * wave * distortion / (i + 1.0);
-
-        // Track wave peaks for tinting
-        peak_sum  += saturate(wave * 0.5 + 0.5);
+        disp += dir * wave * distortion / max(band + 1.0, 0.001);
+        peak_sum += saturate(wave * 0.5 + 0.5);
     }
 
-    peak_sum /= wave_count;
+    peak_sum /= max(wave_count, 0.001);
 
-    // --- Sample distorted image ---
     float2 warped_uv = clamp(uv + disp, 0.0, 1.0);
-    float4 src       = image.Sample(textureSampler, warped_uv);
+    float4 src = image.Sample(textureSampler, warped_uv);
 
-    // --- Blue-white tint on wave peaks ---
-    // Peak tint: blend toward blue-white
     float3 shield_color = float3(0.6, 0.85, 1.0);
     float3 col = src.rgb + shield_color * peak_sum * tint_strength;
 
-    // Slight overall blue-cyan wash
     float luma = dot(col, float3(0.299, 0.587, 0.114));
     float3 blue_wash = float3(luma * 0.85, luma * 0.95, luma * 1.15);
     col = lerp(col, blue_wash, tint_strength * 0.4);
-
     col = saturate(col);
 
     return float4(col, src.a);
