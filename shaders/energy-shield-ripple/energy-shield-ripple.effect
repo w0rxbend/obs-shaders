@@ -7,14 +7,66 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
 uniform float elapsed_time;
-uniform float ripple_speed   = 2.0;  // 0.5–5.0
-uniform float impact_x       = 0.5;  // 0.0–1.0
-uniform float impact_y       = 0.5;  // 0.0–1.0
-uniform float ripple_strength = 0.02; // 0.0–0.04
-uniform float flash_color_r  = 0.3;
-uniform float flash_color_g  = 0.7;
-uniform float flash_color_b  = 1.0;
+
+uniform float ripple_speed <
+    string label = "Ripple Speed";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0;
+
+uniform float impact_x <
+    string label = "Impact X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float impact_y <
+    string label = "Impact Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float ripple_strength <
+    string label = "Ripple Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.04;
+    float step = 0.001;
+> = 0.02;
+
+uniform float flash_color_r <
+    string label = "Flash Red";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+
+uniform float flash_color_g <
+    string label = "Flash Green";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float flash_color_b <
+    string label = "Flash Blue";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -31,56 +83,53 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv      = v_in.uv;
-    float2 impact  = float2(impact_x, impact_y);
-    float2 delta   = uv - impact;
-    float  dist    = length(delta);
+    float2 uv = v_in.uv;
+    float2 impact = float2(impact_x, impact_y);
+    // Height-normalized so the shield ring stays circular on widescreen.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 delta = uv - impact;
+    float2 delta_screen = float2(delta.x * aspect, delta.y);
+    float dist = length(delta_screen);
 
-    // --- Expanding ripple ring ---
-    // The ripple radius grows over time, looping with a period
-    float period     = 2.5 / ripple_speed;
+    // Expanding ripple ring. Radius grows over time and loops.
+    float period = 2.5 / max(ripple_speed, 0.001);
     float phase_time = fmod(elapsed_time, period);
-    float radius     = phase_time * ripple_speed * 0.35; // expands 0..~0.875
+    float radius = phase_time * ripple_speed * 0.35;
 
-    // Ripple wave: sharp ring around the expanding radius
     float ring_width = 0.06;
-    float ring_dist  = abs(dist - radius);
-    float ring       = exp(-ring_dist * ring_dist / (ring_width * ring_width) * 18.0);
+    float ring_dist = abs(dist - radius);
+    float ring_denom = max(ring_width * ring_width, 0.001);
+    float ring = exp(-ring_dist * ring_dist / ring_denom * 18.0);
 
-    // Wave displacement: push pixels radially
-    float2 dir = (dist > 0.001) ? (delta / dist) : float2(0.0, 1.0);
-    // The wave is strongest at the ring front, fades outward
+    float2 dir_screen = delta_screen / max(dist, 0.001);
+    float2 dir = float2(dir_screen.x / max(aspect, 0.001), dir_screen.y);
     float wave_phase = (dist - radius) * 60.0;
-    float wave_disp  = sin(wave_phase) * ring * ripple_strength;
-    // Fade out as it expands
-    float fade       = 1.0 - saturate(radius / 0.85);
-    wave_disp       *= fade;
+    float wave_disp = sin(wave_phase) * ring * ripple_strength;
+    float fade = 1.0 - saturate(radius / 0.85);
+    wave_disp *= fade;
 
     float2 warped_uv = clamp(uv + dir * wave_disp, 0.0, 1.0);
-    float4 src       = image.Sample(textureSampler, warped_uv);
+    float4 src = image.Sample(textureSampler, warped_uv);
 
-    // --- Energy color flash on the ring ---
     float3 flash_col = float3(flash_color_r, flash_color_g, flash_color_b);
-    float  flash_amt = ring * fade * 0.7;
-    float3 col       = src.rgb + flash_col * flash_amt;
+    float flash_amt = ring * fade * 0.7;
+    float3 col = src.rgb + flash_col * flash_amt;
 
-    // --- Secondary inner glow (concentric echo rings) ---
     for (float i = 1.0; i <= 2.0; i++)
     {
         float echo_radius = max(0.0, radius - i * 0.07);
-        float echo_dist   = abs(dist - echo_radius);
-        float echo_ring   = exp(-echo_dist * echo_dist / (ring_width * ring_width) * 30.0);
-        col += flash_col * echo_ring * fade * 0.2 / i;
+        float echo_dist = abs(dist - echo_radius);
+        float echo_ring = exp(-echo_dist * echo_dist / ring_denom * 30.0);
+        col += flash_col * echo_ring * fade * 0.2 / max(i, 0.001);
     }
 
     col = saturate(col);
-
     return float4(col, src.a);
 }
 
