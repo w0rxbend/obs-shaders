@@ -5,12 +5,48 @@
 // Use case: Vignette darkens everything except a spotlight ellipse centered on the face area
 // Chain order: Apply before color grading; combine with webcam-rounded-frame for full frame effect
 
-uniform float center_x  = 0.5;  // 0.0 – 1.0
-uniform float center_y  = 0.45; // 0.0 – 1.0
-uniform float radius_x  = 0.22; // 0.05 – 0.5
-uniform float radius_y  = 0.28; // 0.05 – 0.5
-uniform float darkness  = 0.7;  // 0.0 – 1.0
-uniform float softness  = 0.4;  // 0.0 – 1.0
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.45;
+uniform float radius_x <
+    string label = "Radius X";
+    string widget_type = "slider";
+    float minimum = 0.05;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.22;
+uniform float radius_y <
+    string label = "Radius Y";
+    string widget_type = "slider";
+    float minimum = 0.05;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.28;
+uniform float darkness <
+    string label = "Darkness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
 
 uniform texture2d image;
 
@@ -32,8 +68,10 @@ float4 mainImage(VertData v_in) : TARGET
 
     // Normalized distance from center, scaled by per-axis radius.
     float2 center = float2(center_x, center_y);
-    float2 delta  = (uv - center) / max(float2(radius_x, radius_y), 0.001);
-    float  dist   = length(delta);
+    float rx = max(radius_x, 0.001);
+    float ry = max(radius_y, 0.001);
+    float2 delta = (uv - center) / float2(rx, ry);
+    float dist = length(delta);
 
     // Inner edge of the soft falloff at dist=1, outer at dist = 1+softness.
     float soft_outer = 1.0 + max(softness, 0.001);
@@ -42,6 +80,6 @@ float4 mainImage(VertData v_in) : TARGET
     // darken = 0 at spotlight center (no darkening), darkness at far edges.
     float darken = (1.0 - spotlight) * darkness;
 
-    col.rgb *= (1.0 - darken);
+    col.rgb = saturate(col.rgb * (1.0 - darken));
     return col;
 }
