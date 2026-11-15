@@ -1,27 +1,70 @@
 // Filename: shader_046_sleep_paralysis_edges.effect
 // Category: Horror / supernatural pack
 // Effect: Sleep paralysis edges
-// Visual principle: crushed shadows, color-biased darkness, pulse timing, and unstable edges.
-// What makes it cool: it adds dread by making the frame feel reactive and contaminated.
+// Visual principle: the center stays readable while the border crawls, fringes, and sinks into a cold shadow.
+// What makes it cool: the frame edge feels watched, and a talking head stays recognizable.
 // Suggested source type: webcam, horror games, video source, dramatic scenes
 // Suggested shader-chain combinations: this shader -> ghost double image -> dark vignette
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.93;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.37;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,54 +82,69 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
+    float alpha = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        alpha = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
-    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
-    float gray = luma3(color.rgb);
-    float3 curse = float3(0.850, 0.050, 0.040);
-    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
-    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
-    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
-    out_rgb.r += pulse * 0.10 * intensity;
-    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float radius = length(from_center);
+    float half_frame = length(float2(aspect * 0.5, 0.5));
+    // Ramp starts outside a centered talking head so the face stays readable.
+    float edge = smoothstep(0.40, 0.98, radius / max(half_frame, 0.001));
+
+    // Wrap the clock so a long stream does not lose the crawl phase.
+    float clock = fmod(elapsed_time * speed, 1024.0);
+    float breath = 0.5 + 0.5 * sin(clock * 0.85);
+    float angle = atan2(from_center.y, from_center.x);
+    float crawl = 0.5 + 0.5 * sin(angle * 4.0 - clock * 1.15);
+    float unstable = edge * lerp(0.55, 1.0, crawl);
+
+    float2 tangent = float2(-from_center.y, from_center.x);
+    float tangent_len = length(tangent);
+    tangent /= max(tangent_len, 0.001);
+    tangent.x /= max(aspect, 0.001);
+    float wobble = sin(angle * 6.0 + clock * 1.6) * 0.014 * unstable * amount;
+    float2 shifted = clamp(uv + tangent * wobble, 0.0, 1.0);
+
+    float4 source = image.Sample(textureSampler, uv);
+    float4 shifted_color = image.Sample(textureSampler, shifted);
+    float smear = 0.006 * unstable * amount;
+    float3 minus_rgb = image.Sample(textureSampler, clamp(shifted - float2(smear, 0.0), 0.0, 1.0)).rgb;
+    float3 plus_rgb = image.Sample(textureSampler, clamp(shifted + float2(smear, 0.0), 0.0, 1.0)).rgb;
+
+    float3 rgb = lerp(source.rgb, shifted_color.rgb, edge);
+    float3 fringe = float3(minus_rgb.r, rgb.g, plus_rgb.b);
+    rgb = lerp(rgb, fringe, saturate(unstable * 0.8));
+
+    float luma = dot(rgb, float3(0.299, 0.587, 0.114));
+    float3 cold = float3(luma * 0.20, luma * 0.22, luma * 0.34);
+    float darkness = saturate(edge * (0.55 + 0.20 * breath) * intensity);
+    rgb = lerp(rgb, cold, darkness);
+
+    float tau = 6.283185;
+    float orbit = fmod(clock * 0.12, tau);
+    float delta = fmod(abs(angle - orbit), tau);
+    delta = min(delta, tau - delta);
+    float figure = exp(-delta * delta * 1.8) * edge * amount;
+    rgb *= 1.0 - figure * 0.40;
+
+    return float4(saturate(rgb), alphaOut(source.a));
 }
 
 technique Draw
