@@ -5,9 +5,29 @@
 // neon_shift   : strength of cyan/magenta hue shift (0.0–1.0, default 0.4)
 // bloom_strength: additive edge bloom intensity (0.0–1.0, default 0.3)
 
-uniform float saturation    = 2.2;
-uniform float neon_shift    = 0.4;
-uniform float bloom_strength = 0.3;
+uniform float saturation <
+    string label = "Saturation";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 2.2;
+
+uniform float neon_shift <
+    string label = "Neon Shift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float bloom_strength <
+    string label = "Bloom Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
 
 uniform float2 uv_pixel_interval;
 uniform texture2d image;
@@ -47,7 +67,6 @@ float4 mainImage(VertData v_in) : TARGET
     float3 magenta = float3(1.0, 0.0, 1.0);
     // Weight toward cyan where blue dominates, magenta where red dominates
     float redDom  = saturate(col.r - col.b);
-    float blueDom = saturate(col.b - col.r);
     float3 neonTarget = lerp(cyan * lum, magenta * lum, redDom);
     col = lerp(col, neonTarget, neon_shift * saturate(lum * 2.0));
     col = saturate(col);
