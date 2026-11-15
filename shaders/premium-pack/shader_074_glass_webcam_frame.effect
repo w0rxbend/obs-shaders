@@ -1,8 +1,8 @@
 // Filename: shader_074_glass_webcam_frame.effect
 // Category: Streamer branding pack
 // Effect: Glass webcam frame
-// Visual principle: radial or directional UV warping with small compensating zoom.
-// What makes it cool: it bends the camera feed like a lens or energy field while preserving the source.
+// Visual principle: aspect-correct rounded webcam window with a refractive glass rim and a slow edge glint.
+// What makes it cool: the feed sits in a beveled glass frame while the face stays readable and in place.
 // Suggested source type: webcam, game capture, image source, video source
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> bloom
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.17;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.37;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,54 +82,77 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-float hash12(float2 p)
+float sdRoundedBox(float2 p, float2 half_extent, float radius)
 {
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
+    float2 q = abs(p) - half_extent + radius;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-float luma3(float3 c)
+float2 roundedBoxNormal(float2 q, float2 half_extent, float radius, float eps)
 {
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
-float alphaOut(float sampled_alpha)
-{
-    float a = sampled_alpha;
-    [branch]
-    if (!preserve_alpha)
-    {
-        a = 1.0;
-    }
-    return a * saturate(opacity);
+    float dx = sdRoundedBox(q + float2(eps, 0.0), half_extent, radius)
+        - sdRoundedBox(q - float2(eps, 0.0), half_extent, radius);
+    float dy = sdRoundedBox(q + float2(0.0, eps), half_extent, radius)
+        - sdRoundedBox(q - float2(0.0, eps), half_extent, radius);
+    float2 grad = float2(dx, dy);
+    return grad / max(length(grad), 0.001);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 center = float2(center_x, center_y);
-    float2 p = uv - center;
-    float t = elapsed_time * speed;
-    float radius = length(p);
-    float wave = sin(radius * 20.0 - t * 3.0) * 0.025 * amount * intensity;
-    float bend = dot(p, p) * (0.22 + 4.0 * 0.025) * amount;
-    float2 dir = normalize(p + float2(0.0001, 0.0002));
-    float2 uv = center + p / (1.04 + abs(wave) + bend * 0.2) + dir * wave + p * bend;
-    float4 warped = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float frame = clamp(amount, 0.0, 2.0);
+    float room_x = max(min(center_x, 1.0 - center_x), 0.0);
+    float room_y = max(min(center_y, 1.0 - center_y), 0.0);
+    float margin = min(0.045 * frame, min(room_x, room_y) * 0.35);
+    float2 half_extent = float2((room_x - margin) * aspect, room_y - margin);
+    half_extent = max(half_extent, float2(0.001, 0.001));
+    float radius = min(0.12 * frame, min(half_extent.x, half_extent.y) * 0.48);
+    float rim = min(0.02 * frame, max(radius, 0.0));
+
+    // Height units so the glass corners stay circular on a wide webcam.
+    float2 q = float2((uv.x - center_x) * aspect, uv.y - center_y);
+    float aa = max(1.25 / max(uv_size.y, 1.0), 0.001);
+    float dist = sdRoundedBox(q, half_extent, radius);
+    float2 normal_q = roundedBoxNormal(q, half_extent, radius, aa);
+    float2 normal_uv = float2(normal_q.x / max(aspect, 0.001), normal_q.y);
+
+    float shape = 1.0 - smoothstep(-aa, aa, dist);
+    float inner = 1.0 - smoothstep(-aa, aa, dist + rim);
+    float ring = saturate(shape - inner);
+    float glass_reach = max(rim * 4.0, 0.001);
+    float band = 1.0 - smoothstep(0.0, glass_reach, -dist);
+    float glass = clamp(intensity, 0.0, 2.0);
+    float bend = band * 0.007 * glass;
+    float2 sample_uv = clamp(uv - normal_uv * bend, float2(0.0, 0.0), float2(1.0, 1.0));
+
+    float4 base = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+    float4 pane = image.Sample(textureSampler, sample_uv);
+
+    float sweep = sin(atan2(q.y, q.x) - elapsed_time * speed * 0.4);
+    float glint = pow(saturate(sweep), 10.0);
+    float facing = saturate(dot(normal_q, float2(-0.50, 0.866)));
+    float spec = saturate((glint * 0.75 + pow(facing, 12.0)) * glass);
+
+    float3 cool = saturate(pane.rgb * float3(0.90, 0.97, 1.03) + float3(spec, spec, spec) * 0.08 * band);
+    float3 body = lerp(pane.rgb, cool, band * glass * 0.2);
+    float3 rim_rgb = lerp(pane.rgb, float3(0.70, 0.88, 0.98), 0.55);
+    rim_rgb = lerp(rim_rgb, float3(1.0, 1.0, 1.0), spec * 0.85);
+    float3 rgb = lerp(body, saturate(rim_rgb), ring);
+
+    float alpha = base.a * shape;
+    [branch]
+    if (!preserve_alpha)
+    {
+        rgb = lerp(float3(0.03, 0.04, 0.05), rgb, shape);
+        alpha = 1.0;
+    }
+    return float4(rgb, alpha * saturate(opacity));
 }
 
 technique Draw
