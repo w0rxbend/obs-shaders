@@ -6,22 +6,66 @@
 // Suggested source type: webcam, horror games, video source, dramatic scenes
 // Suggested shader-chain combinations: this shader -> ghost double image -> dark vignette
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.09;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.83;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,11 +99,12 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
+float possessionBeat(float wrapped_time, float rate)
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float beat = fmod(wrapped_time * max(rate, 0.0), 1.0);
+    float lub = saturate(1.0 - abs(beat - 0.10) / 0.050);
+    float dub = saturate(1.0 - abs(beat - 0.24) / 0.032);
+    return pow(max(lub, dub * 0.70), 1.35);
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,25 +113,52 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
-    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
-    float gray = luma3(color.rgb);
-    float3 curse = float3(0.850, 0.050, 0.040);
-    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
-    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
-    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
-    out_rgb.r += pulse * 0.10 * intensity;
-    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float wrapped_time = fmod(elapsed_time, 1024.0);
+    float pulse = possessionBeat(wrapped_time, speed);
+    float drive = saturate(max(intensity, 0.0) * 0.50) * saturate(max(amount, 0.0) * 0.70);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 center = float2(center_x, center_y);
+    float2 delta = (uv - center) * float2(aspect, 1.0);
+    float radius = length(delta);
+    float edge = smoothstep(0.15, 0.78, radius);
+    float wobble = sin(wrapped_time * max(speed, 0.0) * 6.28318 + radius * 14.0);
+    // Peak crawl stays a few pixels so a talking head does not leave the frame.
+    float shift_px = edge * (0.40 + pulse) * drive * 7.0 * wobble;
+    float2 dir = delta / max(radius, 0.001);
+    float2 sample_uv = clamp(uv + dir * uv_pixel_interval * shift_px, float2(0.0, 0.0), float2(1.0, 1.0));
+
+    float4 source = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+    float4 warped = image.Sample(textureSampler, sample_uv);
+    float luma = luma3(warped.rgb);
+    float shadow = 1.0 - smoothstep(0.04, 0.48, luma);
+    float3 crushed = float3(luma, luma, luma) * (0.78 - shadow * 0.34);
+    crushed.r += shadow * 0.20 + 0.05;
+    crushed.g *= 0.48;
+    crushed.b *= 0.36;
+
+    float mix_amt = drive * (0.28 + 0.72 * pulse);
+    float3 possessed = lerp(warped.rgb, saturate(crushed), mix_amt);
+    possessed *= 1.0 - pulse * drive * 0.10;
+    float grain = hash12(floor(uv * uv_size * 0.25) + floor(wrapped_time * 6.0)) - 0.5;
+    possessed += grain * 0.06 * pulse * drive;
+
+    float edge_push = edge * (0.08 + 0.28 * pulse) * drive;
+    possessed.r += edge_push * (1.0 - saturate(possessed.r));
+    possessed.g *= 1.0 - edge_push * 0.45;
+    possessed.b *= 1.0 - edge_push * 0.60;
+    possessed = saturate(possessed);
+
+    float3 out_rgb = lerp(source.rgb, possessed, saturate(opacity));
+    return float4(out_rgb, alphaOut(source.a));
 }
 
 technique Draw
