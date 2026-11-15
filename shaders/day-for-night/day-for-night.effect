@@ -6,12 +6,41 @@
 // Chain order: early in chain; combine with noise/grain after
 
 uniform float4x4 ViewProj;
-uniform float darkness  = 0.55; // 0.0 – 1.0
-uniform float blue_push = 0.4;  // 0.0 – 1.0
-uniform float desat     = 0.5;  // 0.0 – 1.0
-uniform float vignette  = 0.4;  // 0.0 – 1.0
-
 uniform texture2d image;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float darkness <
+    string label = "Darkness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.55;
+
+uniform float blue_push <
+    string label = "Blue Push";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float desat <
+    string label = "Desaturate";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float vignette <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -24,12 +53,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -64,7 +92,7 @@ float4 mainImage(VertData v_in) : TARGET
     float vig = 1.0 - clamp(vd * vignette * 1.2, 0.0, 1.0);
     c *= vig;
 
-    c = clamp(c, 0.0, 1.0);
+    c = saturate(c);
     return float4(c, col.a);
 }
 
