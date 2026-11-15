@@ -1,27 +1,71 @@
 // Filename: shader_025_rainy_noir.effect
 // Category: Cinematic camera pack
 // Effect: Rainy noir
-// Visual principle: luminance-aware color remapping, contrast shaping, vignette, and animated grain.
-// What makes it cool: it gives ordinary footage a clear emotional direction in one pass.
+// Visual principle: blue-grey night grade, crushed shadows, falling rain streaks, and a tight vignette.
+// What makes it cool: a wet city night falls over the shot while a talking head stays recognizable.
 // Suggested source type: webcam, game capture, video source, cinematic scenes
 // Suggested shader-chain combinations: exposure controls -> this shader -> film grain
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
+uniform float2 uv_pixel_interval;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.85;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.37;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,11 +99,22 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
+float rainLayer(float2 uv, float time_s, float columns, float seed)
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float2 pixel = max(uv_pixel_interval, float2(0.001, 0.001));
+    float slanted_x = uv.x + (uv.y - 0.5) * 0.16;
+    float column = floor(slanted_x * columns);
+    float vary = hash12(float2(column, seed));
+    float gate = step(0.55, vary);
+    float across = abs(frac(slanted_x * columns) - 0.5) / max(columns, 0.001);
+    float half_width = pixel.x * (2.0 + vary * 1.5);
+    float strand = 1.0 - smoothstep(half_width, half_width * 2.6, across);
+    float cells = 2.4 + vary * 3.2;
+    float travel = (1.35 + vary * 1.45) * cells;
+    float along = frac(uv.y * cells - time_s * travel + vary * 23.0);
+    float head = 1.0 - smoothstep(0.0, 0.07, along);
+    float tail = 1.0 - smoothstep(0.04, 0.42, along);
+    return gate * strand * (head * 0.75 + tail * 0.32);
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,9 +123,9 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
@@ -78,18 +133,47 @@ float4 mainImage(VertData v_in) : TARGET
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
     float gray = luma3(color.rgb);
-    float3 tint = float3(1.000, 0.580, 0.250);
-    float3 warm = float3(1.05, 0.88 + 1 * 0.03, 0.72);
-    float3 cool = float3(0.70, 0.88, 1.12);
-    float vignette = smoothstep(0.88, 0.18, length((uv - float2(center_x, center_y)) * float2(1.15, 1.0)));
-    float grain = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.55) + floor(elapsed_time * speed * 18.0)) - 0.5;
-    float3 graded = lerp(color.rgb, float3(gray, gray, gray), 0.12 + 0.18 * amount);
-    graded = (graded - 0.5) * (1.0 + 0.45 * intensity) + 0.5;
-    graded *= lerp(cool, warm, saturate(tint.r + 0.25));
-    graded = lerp(graded, tint * (0.25 + gray * 0.95), 0.20 * intensity);
-    graded *= 0.72 + vignette * 0.38;
-    graded += grain * 0.045 * intensity;
-    return float4(saturate(graded), alphaOut(color.a));
+    float desat = saturate(0.48 * amount + 0.10 * intensity);
+    float3 noir = lerp(color.rgb, float3(gray, gray, gray), desat);
+    float contrast = 1.0 + 0.16 * intensity;
+    noir = (noir - 0.5) * contrast + 0.5;
+    float crush = min(0.05 * amount, 0.12);
+    noir = max(noir - crush, float3(0.0, 0.0, 0.0));
+    noir = noir / max(1.0 - crush, 0.001);
+
+    float tone = luma3(saturate(noir));
+    float mid = smoothstep(0.08, 0.42, tone) * (1.0 - smoothstep(0.55, 0.92, tone));
+    float shadow = 1.0 - smoothstep(0.0, 0.40, tone);
+    float cool = saturate(amount);
+    noir.r -= cool * 0.055 * (mid + shadow * 0.45);
+    noir.g += cool * 0.035 * mid;
+    noir.b += cool * 0.095 * (mid + shadow * 0.60);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float half_frame = length(float2(aspect * 0.5, 0.5));
+    float vig = length(from_center) / max(half_frame, 0.001);
+    float vignette = 1.0 - smoothstep(0.32, 1.05, vig);
+    noir *= lerp(1.0 - 0.22 * saturate(intensity), 1.0, vignette);
+
+    // Wrap the clock so a long stream does not lose rain-phase precision.
+    float clock = elapsed_time - floor(elapsed_time * (1.0 / 120.0)) * 120.0;
+    float time_s = clock * speed;
+    float density = saturate(amount);
+    float coarse = rainLayer(uv, time_s, 42.0, 2.0);
+    float fine = rainLayer(uv, time_s * 1.35, 88.0, 9.0);
+    float3 rain_tint = float3(0.76, 0.82, 0.92);
+    noir += rain_tint * (coarse * 0.16 + fine * 0.07) * intensity * density;
+
+    float grain_frame = floor(clock * 12.0);
+    float2 grain_px = floor(uv / max(uv_pixel_interval, float2(0.001, 0.001)));
+    float grain = hash12(grain_px + float2(grain_frame, grain_frame * 0.37)) - 0.5;
+    noir += grain * 0.045 * intensity;
+
+    float3 graded = saturate(noir);
+    float3 out_rgb = lerp(color.rgb, graded, saturate(opacity));
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
