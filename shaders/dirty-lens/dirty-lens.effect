@@ -6,9 +6,33 @@
 // Chain order: apply last or near-last; pairs well with bloom/overexposure
 
 uniform float4x4 ViewProj;
-uniform float smudge_scale    = 5.0;  // 1.0 – 15.0   scale of smudge features
-uniform float smudge_strength = 0.25; // 0.0 – 0.5    smudge opacity
-uniform float dust_amount     = 0.15; // 0.0 – 0.5    dust/spot density
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float smudge_scale <
+    string label = "Smudge Scale";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 15.0;
+    float step = 0.01;
+> = 5.0;
+
+uniform float smudge_strength <
+    string label = "Smudge Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.25;
+
+uniform float dust_amount <
+    string label = "Dust Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.15;
 
 uniform texture2d image;
 
@@ -23,12 +47,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -72,16 +95,18 @@ float FBM(float2 p)
     return v;
 }
 
-// Smudge/water spot: circular blobs at procedural positions
-float WaterSpot(float2 uv, float2 center, float radius)
+// Circular water blob. aspect is frame width/height so the spot stays round.
+float WaterSpot(float2 uv, float2 center, float radius, float aspect)
 {
-    float d = length((uv - center) * float2(1.78, 1.0)); // aspect correction ~16:9
+    float2 delta = uv - center;
+    float d = length(float2(delta.x * aspect, delta.y));
     return 1.0 - smoothstep(radius * 0.5, radius, d);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
 
     float4 col = image.Sample(textureSampler, uv);
 
@@ -98,11 +123,8 @@ float4 mainImage(VertData v_in) : TARGET
     // --- Dust spots ---
     // Scatter several fixed dust particles using a grid of potential spots
     // Each grid cell can contain at most one dust particle
-    float  dustDensity = dust_amount * 80.0; // scale to ~0-40 visible spots
-
     float2 dustGrid = uv * 12.0; // 12x12 grid cells
     float2 dustCell = floor(dustGrid);
-    float2 dustFrac = frac(dustGrid);
 
     float dustMask = 0.0;
     // Check a 3x3 neighborhood of cells for spots that might overlap
@@ -120,7 +142,7 @@ float4 mainImage(VertData v_in) : TARGET
                 float2 spotCenter = neighborCell + spotOffset;
                 float2 spotUv     = dustGrid - spotCenter;
                 float  spotRad    = 0.08 + Hash21(neighborCell * 7.3) * 0.18;
-                float  spotDist   = length(spotUv * float2(1.0, 1.78));
+                float  spotDist   = length(float2(spotUv.x * aspect, spotUv.y));
                 float  spotAlpha  = 1.0 - smoothstep(spotRad * 0.3, spotRad, spotDist);
                 // Vary darkness: some dust is dark, some is bright (specular)
                 float  spotBright = Hash21(neighborCell * 13.1);
@@ -135,13 +157,13 @@ float4 mainImage(VertData v_in) : TARGET
 
     // --- Water spot rings ---
     // A couple of static large water drops near center area
-    float water1 = WaterSpot(uv, float2(0.35, 0.42), 0.055 * smudge_scale * 0.06);
-    float water2 = WaterSpot(uv, float2(0.62, 0.58), 0.04 * smudge_scale * 0.06);
+    float water1 = WaterSpot(uv, float2(0.35, 0.42), 0.055 * smudge_scale * 0.06, aspect);
+    float water2 = WaterSpot(uv, float2(0.62, 0.58), 0.04 * smudge_scale * 0.06, aspect);
     float waterMask = saturate(water1 + water2);
 
     // Water spots: slight brightness boost at edge ring, dark center
-    float2 w1off = (uv - float2(0.35, 0.42));
-    float  w1rim = abs(length(w1off * float2(1.78, 1.0)) - 0.025 * smudge_scale * 0.06);
+    float2 w1off = uv - float2(0.35, 0.42);
+    float  w1rim = abs(length(float2(w1off.x * aspect, w1off.y)) - 0.025 * smudge_scale * 0.06);
     float  waterRim = 1.0 - smoothstep(0.0, 0.012, w1rim);
     col.rgb = lerp(col.rgb, col.rgb * 1.35, waterRim * smudge_strength * 0.8);
     col.rgb = lerp(col.rgb, col.rgb * 0.85, waterMask * smudge_strength * 0.4);
