@@ -1,27 +1,71 @@
 // Filename: shader_055_cyberpunk_neon_boost.effect
 // Category: Cyberpunk / glitch pack
 // Effect: Cyberpunk neon boost
-// Visual principle: channel separation, block displacement, horizontal tears, and quantized corruption.
-// What makes it cool: it creates readable digital failure while keeping the source recognizable.
+// Visual principle: saturation lift, cyan-magenta split tone, and a slow neon edge bloom.
+// What makes it cool: colored light pops like neon while a talking head stays recognizable.
 // Suggested source type: screen capture, game capture, music visuals, alerts
 // Suggested shader-chain combinations: this shader -> RGB split -> digital noise
-// Performance cost: medium
+// Performance cost: low
 // Alpha safe: no
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
+uniform float2 uv_pixel_interval;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.85;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,27 +83,13 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
 }
 
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -77,21 +107,42 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float row = floor(uv.y * (24.0 + amount * 28.0));
-    float gate = step(0.68, hash12(float2(row, floor(t * 8.0))));
-    float shift = (hash12(float2(row * 3.1, floor(t * 6.0))) - 0.5) * 0.075 * amount * gate;
-    float block = floor(uv.x * 18.0) + floor(uv.y * 10.0) * 31.0;
-    float block_gate = step(0.78, hash12(float2(block, floor(t * 4.0))));
-    float2 duv = float2(shift + block_gate * 0.025 * sin(t + block), 0.0);
-    float spread = 0.006 * intensity + abs(shift) * 0.25;
-    float rch = image.Sample(textureSampler, clamp(uv + duv + float2(spread, 0.0), 0.0, 1.0)).r;
-    float gch = image.Sample(textureSampler, clamp(uv + duv, 0.0, 1.0)).g;
-    float bch = image.Sample(textureSampler, clamp(uv + duv - float2(spread, 0.0), 0.0, 1.0)).b;
-    float3 accent = float3(1.000, 0.000, 0.550);
-    float3 out_rgb = lerp(float3(rch, gch, bch), accent, gate * 0.12 * intensity);
-    out_rgb += (hash12(floor(uv * uv_size / 2.0) + floor(t * 22.0)) - 0.5) * 0.07 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float3 rgb = color.rgb;
+    float luma = luma3(rgb);
+    float3 gray = float3(luma, luma, luma);
+    float sat = 1.0 + 0.38 * intensity;
+    float3 saturated = lerp(gray, rgb, sat);
+
+    // x is wider than y, so the milder zone around the subject stays round.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float radius = length(from_center);
+    float fringe = smoothstep(0.20, 1.10, radius);
+    float grade_mix = saturate(amount * lerp(0.28, 0.55, fringe));
+
+    float tone = smoothstep(0.20, 0.85, luma);
+    float3 split = lerp(float3(0.45, 0.85, 1.25), float3(1.25, 0.55, 1.05), tone);
+    float3 graded = lerp(saturated, saturated * split, grade_mix);
+
+    float chroma = length(saturated - gray);
+    float pop = smoothstep(0.22, 0.62, chroma) * smoothstep(0.05, 0.25, luma);
+    float red_dom = saturate(saturated.r - saturated.b);
+    float3 neon = lerp(float3(0.0, 0.90, 1.0), float3(1.0, 0.05, 0.80), red_dom);
+    graded = lerp(graded, neon * luma, pop * saturate(amount * 0.65));
+
+    float2 texel = uv_pixel_interval * (2.0 + amount);
+    float3 north = image.Sample(textureSampler, clamp(uv + float2(0.0, -texel.y), 0.0, 1.0)).rgb;
+    float3 south = image.Sample(textureSampler, clamp(uv + float2(0.0, texel.y), 0.0, 1.0)).rgb;
+    float3 east = image.Sample(textureSampler, clamp(uv + float2(texel.x, 0.0), 0.0, 1.0)).rgb;
+    float3 west = image.Sample(textureSampler, clamp(uv - float2(texel.x, 0.0), 0.0, 1.0)).rgb;
+    float edge = luma3(abs(east - west)) + luma3(abs(north - south));
+
+    float wrapped = fmod(elapsed_time * speed, 1024.0);
+    float pulse = 0.75 + 0.25 * sin(wrapped);
+    graded += neon * edge * pulse * intensity * (0.80 + 0.40 * fringe);
+
+    return float4(saturate(graded), alphaOut(color.a));
 }
 
 technique Draw
