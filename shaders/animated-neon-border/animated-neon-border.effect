@@ -5,11 +5,37 @@
 // Use case: Animated glowing neon border that pulses in color around the edge of the source
 // Chain order: Apply after webcam-rounded-frame, before color grading
 
-uniform float border_width   = 0.03; // 0.01 – 0.1
-uniform float pulse_speed    = 1.5;  // 0.0 – 5.0
-uniform float hue_speed      = 0.4;  // 0.0 – 2.0
-uniform float glow_intensity = 1.5;  // 0.0 – 3.0
+uniform float border_width <
+    string label = "Border width";
+    string widget_type = "slider";
+    float minimum = 0.01;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.03;
+uniform float pulse_speed <
+    string label = "Pulse speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 1.5;
+uniform float hue_speed <
+    string label = "Hue speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.4;
+uniform float glow_intensity <
+    string label = "Glow intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.5;
+
 uniform float elapsed_time;
+uniform float2 uv_size;
 
 uniform texture2d image;
 
@@ -38,9 +64,12 @@ float4 mainImage(VertData v_in) : TARGET
     float2 uv  = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    // Distance from the nearest edge (0 at edges, 0.5 at center).
-    float2 edge_dist = min(uv, 1.0 - uv);
-    float  d         = min(edge_dist.x, edge_dist.y);
+    // Height-fraction distance so the frame is the same pixel thickness on every side.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 aspect_uv = float2(uv.x * aspect, uv.y);
+    float2 frame = float2(aspect, 1.0);
+    float2 edge_dist = min(aspect_uv, frame - aspect_uv);
+    float d = min(edge_dist.x, edge_dist.y);
 
     // Normalized position in the border band [0,1]; 0 = outer edge, 1 = inner edge.
     float border_t = saturate(d / max(border_width, 0.001));
