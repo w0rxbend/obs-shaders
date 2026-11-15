@@ -6,9 +6,31 @@
 // Chain order: Apply first in chain before any color grading
 
 uniform float4x4 ViewProj;
-uniform float size     = 0.45; // 0.1 – 0.8
-uniform float softness = 0.008; // 0.001 – 0.05
-uniform float aspect   = 1.0;  // horizontal stretch of the diamond
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float size <
+    string label = "Size";
+    string widget_type = "slider";
+    float minimum = 0.1;
+    float maximum = 0.8;
+    float step = 0.01;
+> = 0.45;
+uniform float softness <
+    string label = "Edge Softness";
+    string widget_type = "slider";
+    float minimum = 0.001;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.008;
+uniform float aspect <
+    string label = "Horizontal Stretch";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
 
 uniform texture2d image;
 
@@ -27,7 +49,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -35,22 +57,24 @@ VertData VSDefault(VertData v_in)
 // Returns signed distance; negative = inside, positive = outside
 float sdfDiamond(float2 p, float r)
 {
-    // Scale x by aspect inverse so "aspect" stretches the shape horizontally
-    p.x /= max(aspect, 0.001);
-    return dot(abs(p), float2(1.0, 1.0)) - r;
+    // Height-fraction space keeps a rotated square on a non-square webcam.
+    // aspect > 1 stretches that square horizontally.
+    float frame_aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 scaled = float2(p.x * frame_aspect / max(aspect, 0.001), p.y);
+    return dot(abs(scaled), float2(1.0, 1.0)) - r;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv  = v_in.uv;
+    float2 uv = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    float2 p   = uv - float2(0.5, 0.5);
-    float  d   = sdfDiamond(p, size);
+    float2 from_center = uv - float2(0.5, 0.5);
+    float dist = sdfDiamond(from_center, size);
+    float edge = max(softness, 0.001);
+    float mask = 1.0 - smoothstep(-edge, edge, dist);
 
-    float  alpha = 1.0 - smoothstep(-softness, softness, d);
-
-    col.a *= alpha;
+    col.a *= mask;
     return col;
 }
 
