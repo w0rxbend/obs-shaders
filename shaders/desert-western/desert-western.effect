@@ -6,11 +6,35 @@
 // Chain order: early in chain; pair with dust/grain overlays after
 
 uniform float4x4 ViewProj;
-uniform float sand_tint  = 0.5;  // 0.0 – 1.0
-uniform float black_lift = 0.08; // 0.0 – 0.15
-uniform float fade       = 0.2;  // 0.0 – 0.5
-
 uniform texture2d image;
+
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+
+uniform float sand_tint <
+    string label = "Sand Tint";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float black_lift <
+    string label = "Black Lift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.15;
+    float step = 0.01;
+> = 0.08;
+
+uniform float fade <
+    string label = "Fade";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.2;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -23,49 +47,37 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float luma(float3 c)
-{
-    return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float4 col = image.Sample(textureSampler, v_in.uv);
-    float3 c   = col.rgb;
+    float3 c = col.rgb;
 
-    // Lift blacks — milky, bleached-out shadows
     c = c * (1.0 - black_lift) + black_lift;
 
-    // Fade highlights — compress dynamic range at top
-    // Map [0,1] to [0, 1-fade]
     float highlight_ceiling = 1.0 - fade * 0.6;
     c = c * highlight_ceiling;
 
-    // Yellow-orange sand tint
-    // Push R and G up, suppress B
-    float lum = luma(c);
     float3 sandColor = float3(1.0, 0.88, 0.55);
     float tintStrength = sand_tint * 0.45;
     c = lerp(c, c * sandColor, tintStrength);
 
-    // Slight warm vignette (edges go warm-dark, not cold-dark)
-    float2 centered = v_in.uv - float2(0.5, 0.5);
-    float vd = dot(centered, centered);
-    float vig = 1.0 - clamp(vd * 0.9, 0.0, 0.55);
-    float3 warmVig = float3(vig, vig * 0.96, vig * 0.88);
-    c *= warmVig;
+    // Blue falls faster than red so the edge reads warm, not cold.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (v_in.uv - float2(0.5, 0.5)) * float2(aspect, 1.0);
+    float corner_len = 0.5 * length(float2(aspect, 1.0));
+    float edge = length(from_center) / max(corner_len, 0.001);
+    float vig = 1.0 - clamp(edge * 0.45, 0.0, 0.55);
+    c *= float3(vig, vig * 0.96, vig * 0.88);
 
-    c = clamp(c, 0.0, 1.0);
-    return float4(c, col.a);
+    return float4(saturate(c), col.a);
 }
 
 technique Draw
