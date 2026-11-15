@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
-uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.09;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.37;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,18 +93,6 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
@@ -70,28 +101,48 @@ float alphaOut(float sampled_alpha)
     {
         a = 1.0;
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float row = floor(uv.y * (24.0 + amount * 28.0));
-    float gate = step(0.68, hash12(float2(row, floor(t * 8.0))));
-    float shift = (hash12(float2(row * 3.1, floor(t * 6.0))) - 0.5) * 0.075 * amount * gate;
-    float block = floor(uv.x * 18.0) + floor(uv.y * 10.0) * 31.0;
-    float block_gate = step(0.78, hash12(float2(block, floor(t * 4.0))));
-    float2 duv = float2(shift + block_gate * 0.025 * sin(t + block), 0.0);
-    float spread = 0.006 * intensity + abs(shift) * 0.25;
-    float rch = image.Sample(textureSampler, clamp(uv + duv + float2(spread, 0.0), 0.0, 1.0)).r;
-    float gch = image.Sample(textureSampler, clamp(uv + duv, 0.0, 1.0)).g;
-    float bch = image.Sample(textureSampler, clamp(uv + duv - float2(spread, 0.0), 0.0, 1.0)).b;
-    float3 accent = float3(0.150, 1.000, 0.350);
-    float3 out_rgb = lerp(float3(rch, gch, bch), accent, gate * 0.12 * intensity);
-    out_rgb += (hash12(floor(uv * uv_size / 2.0) + floor(t * 22.0)) - 0.5) * 0.07 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    // 1.5 times speed stays under 3 tear changes per second at the default.
+    float clock = fmod(elapsed_time * speed, 1024.0);
+    float tear_tick = floor(clock * 1.5);
+    float bands = 5.0 + amount * 7.0;
+    float band = floor(uv.y * bands + (center_y - 0.5) * bands);
+    float tear_on = step(0.62, hash12(float2(band, tear_tick)));
+    float slip = (hash12(float2(band, tear_tick + 3.0)) - 0.5) * 0.045 * amount;
+    float bias = (center_x - 0.5) * 0.04 * amount;
+    float shift = (slip + bias) * tear_on;
+
+    float block_cols = 6.0 + amount * 4.0;
+    float block_id = floor(uv.x * block_cols) + band * 17.0;
+    float block_hash = hash12(float2(block_id, tear_tick + 7.0));
+    float block_on = step(0.82, block_hash) * tear_on;
+    shift += (block_hash - 0.5) * 0.016 * intensity * block_on;
+
+    float cells = max(72.0 + amount * 24.0, 0.001);
+    float2 snapped = floor(uv * cells) / cells;
+    float quant_mix = tear_on * saturate(intensity * 0.45);
+    float2 torn_uv = clamp(lerp(uv, snapped, quant_mix) + float2(shift, 0.0), 0.0, 1.0);
+    float split = (2.0 + 3.0 * intensity) * uv_pixel_interval.x * tear_on;
+    float3 torn = float3(
+        image.Sample(textureSampler, clamp(torn_uv + float2(split, 0.0), 0.0, 1.0)).r,
+        image.Sample(textureSampler, torn_uv).g,
+        image.Sample(textureSampler, clamp(torn_uv - float2(split, 0.0), 0.0, 1.0)).b);
+
+    float levels = max(8.0, 0.001);
+    float3 stepped = floor(torn * levels) / levels;
+    torn = lerp(torn, stepped, tear_on * 0.5 * saturate(intensity));
+    float corrupt = (hash12(float2(band, tear_tick + 11.0)) - 0.5) * 0.08 * intensity * tear_on;
+    torn = saturate(torn + corrupt);
+
+    float3 out_rgb = lerp(source.rgb, torn, saturate(opacity));
+    return float4(out_rgb, alphaOut(source.a));
 }
 
 technique Draw
