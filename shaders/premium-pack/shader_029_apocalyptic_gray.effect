@@ -1,27 +1,70 @@
 // Filename: shader_029_apocalyptic_gray.effect
 // Category: Cinematic camera pack
 // Effect: Apocalyptic gray
-// Visual principle: luminance-aware color remapping, contrast shaping, vignette, and animated grain.
-// What makes it cool: it gives ordinary footage a clear emotional direction in one pass.
+// Visual principle: ash desaturation, dust-haze contrast, smoky vignette, and slow falling ash.
+// What makes it cool: the shot goes gray and dusty like a ruined sky while a face stays readable.
 // Suggested source type: webcam, game capture, video source, cinematic scenes
 // Suggested shader-chain combinations: exposure controls -> this shader -> film grain
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.17;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.83;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,41 +98,66 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
     float gray = luma3(color.rgb);
-    float3 tint = float3(0.480, 0.620, 0.920);
-    float3 warm = float3(1.05, 0.88 + 1 * 0.03, 0.72);
-    float3 cool = float3(0.70, 0.88, 1.12);
-    float vignette = smoothstep(0.88, 0.18, length((uv - float2(center_x, center_y)) * float2(1.15, 1.0)));
-    float grain = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.55) + floor(elapsed_time * speed * 18.0)) - 0.5;
-    float3 graded = lerp(color.rgb, float3(gray, gray, gray), 0.12 + 0.18 * amount);
-    graded = (graded - 0.5) * (1.0 + 0.45 * intensity) + 0.5;
-    graded *= lerp(cool, warm, saturate(tint.r + 0.25));
-    graded = lerp(graded, tint * (0.25 + gray * 0.95), 0.20 * intensity);
-    graded *= 0.72 + vignette * 0.38;
-    graded += grain * 0.045 * intensity;
-    return float4(saturate(graded), alphaOut(color.a));
+    float gray_mix = saturate(0.78 * amount);
+    float punch = saturate(intensity * 0.5);
+
+    float3 ash = float3(gray, gray, gray) * float3(0.93, 0.90, 0.82);
+    float3 graded = lerp(color.rgb, ash, gray_mix);
+    // Match source luma so the ash tint does not sink a talking head.
+    graded *= gray / max(luma3(graded), 0.001);
+
+    float contrast = 1.0 + 0.28 * punch;
+    graded = (graded - 0.5) * contrast + 0.5;
+
+    float shadow = 1.0 - smoothstep(0.02, 0.32, gray);
+    graded.r += shadow * 0.035 * gray_mix;
+    graded.b -= shadow * 0.025 * gray_mix;
+
+    float highlight = smoothstep(0.72, 1.0, gray);
+    graded = lerp(graded, graded * float3(0.94, 0.92, 0.86), highlight * gray_mix);
+
+    // Scale x by aspect so the smoke ring stays circular on widescreen.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float corner = length(float2(aspect * 0.5, 0.5));
+    float falloff = length(from_center) / max(corner, 0.001);
+    float vignette = smoothstep(0.22, 1.0, falloff);
+    graded *= lerp(1.0, 0.68, vignette * punch);
+
+    // Wrap the clock so a long stream does not freeze the ash phase.
+    float clock = elapsed_time - floor(elapsed_time * (1.0 / 120.0)) * 120.0;
+    float drift = sin(clock * speed * 0.35);
+    float3 dust = float3(0.55, 0.53, 0.48);
+    graded = lerp(graded, dust, (0.5 + 0.5 * drift) * 0.08 * punch);
+
+    float grain_step = floor(clock * speed * 8.0);
+    float2 grain_cell = floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.5);
+    float grain = hash12(grain_cell + float2(grain_step, 2.0)) - 0.5;
+    graded += grain * 0.035 * punch;
+
+    float2 fall_uv = float2(uv.x * 40.0, uv.y * 22.0 + clock * speed * 0.9);
+    float flake = step(0.986, hash12(floor(fall_uv) + float2(4.0, 9.0)));
+    graded += flake * 0.10 * gray_mix;
+
+    float3 out_rgb = lerp(color.rgb, saturate(graded), saturate(opacity));
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
