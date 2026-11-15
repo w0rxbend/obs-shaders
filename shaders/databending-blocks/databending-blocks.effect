@@ -6,10 +6,31 @@
 // Chain order: Last or near-last in chain; pair with chromatic-aberration or digital-noise
 
 uniform float4x4 ViewProj;
-uniform float block_size  = 10.0;  // 4.0–32.0 (pixels, conceptual — as fraction of 100)
-uniform float corruption  = 0.3;   // 0.0–1.0
-uniform float speed       = 2.0;   // 0.0–5.0
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float elapsed_time;
+
+uniform float block_size <
+    string label = "Block Size";
+    string widget_type = "slider";
+    float minimum = 4.0;
+    float maximum = 32.0;
+    float step = 1.0;
+> = 10.0;
+uniform float corruption <
+    string label = "Corruption";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0;
 
 uniform texture2d image;
 
@@ -24,12 +45,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -47,40 +67,26 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Block coordinate (in UV space, block_size is in hundredths)
-    float  invScale  = block_size / 100.0;
+    // block_size is hundredths of UV so the slider stays in a small numeric range
+    float invScale = max(block_size / 100.0, 0.001);
     float2 blockCoord = floor(uv / invScale);
 
-    // Time-stepped seed — blocks update at discrete time intervals
     float timeSlot = floor(elapsed_time * speed);
-
-    // Per-block random seed
     float seed = hash1(blockCoord + float2(timeSlot * 1.37, timeSlot * 0.71));
 
-    // Only corrupt blocks that are "active" this frame
-    float4 col;
+    float2 sampleUV = uv;
     if (seed < corruption)
     {
-        // Random UV offset for this block
-        float ox = (hash1f(seed * 13.7) * 2.0 - 1.0) * 0.25;  // up to 25% shift
+        float ox = (hash1f(seed * 13.7) * 2.0 - 1.0) * 0.25;
         float oy = (hash1f(seed * 27.3) * 2.0 - 1.0) * 0.1;
-
-        // Occasionally flip to a different block entirely (extreme corruption)
-        float2 corruptedUV = uv + float2(ox, oy);
-        corruptedUV = clamp(corruptedUV, 0.0, 1.0);
-
-        // Optionally invert or tint
-        col = image.Sample(textureSampler, corruptedUV);
-
-        // Occasionally apply channel swap
-        if (seed < corruption * 0.3)
-            col.rgb = col.brg;  // channel shuffle
-    }
-    else
-    {
-        col = image.Sample(textureSampler, uv);
+        sampleUV = clamp(uv + float2(ox, oy), 0.0, 1.0);
     }
 
+    float4 col = image.Sample(textureSampler, sampleUV);
+    if (seed < corruption * 0.3)
+        col.rgb = col.brg;
+
+    col.rgb = saturate(col.rgb);
     return col;
 }
 
