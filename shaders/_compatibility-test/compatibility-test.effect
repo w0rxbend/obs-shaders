@@ -14,7 +14,13 @@
 // =====================================================
 
 // --- Uniforms (OBS injects these; declare to expose in UI) ----------------
-uniform float opacity = 1.0;        // 0.0–1.0  pass-through opacity test
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0; // 0.0–1.0  pass-through opacity test
 uniform texture2d image;
 
 sampler_state textureSampler {
