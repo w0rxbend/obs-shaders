@@ -2,12 +2,34 @@
 // Sobel edge detection draws black ink outlines over the original image.
 
 uniform float4x4 ViewProj;
-uniform float thickness       = 1.5;  // 0.5 – 5.0   edge sample radius in pixels
-uniform float threshold       = 0.15; // 0.0 – 1.0   minimum edge strength to draw
-uniform float outline_opacity = 0.9;  // 0.0 – 1.0   opacity of the black outline
-
-uniform float2    uv_pixel_interval;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_pixel_interval;
 uniform texture2d image;
+
+uniform float thickness <
+    string label = "Thickness";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 5.0;
+    float step = 0.1;
+> = 1.5;
+
+uniform float threshold <
+    string label = "Threshold";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.15;
+
+uniform float outline_opacity <
+    string label = "Outline Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.9;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -20,12 +42,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -64,7 +85,7 @@ float4 mainImage(VertData v_in) : TARGET
     float blendFactor = outlineMask * outline_opacity;
     float3 col = lerp(src.rgb, inkLine, blendFactor);
 
-    return float4(col, src.a);
+    return float4(saturate(col), src.a);
 }
 
 technique Draw
