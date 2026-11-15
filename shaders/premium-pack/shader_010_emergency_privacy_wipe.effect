@@ -11,17 +11,61 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.85;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.19;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,48 +99,63 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = saturate(sampled_alpha);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 pixels = max(float2(1.0, 1.0), uv_size);
-    float block = lerp(12.0, 42.0, saturate(amount * 0.7));
-    float2 cells = max(float2(1.0, 1.0), pixels / block);
-    float2 puv = (floor(uv * cells) + 0.5) / cells;
-    float2 px = uv_pixel_interval * (8.0 + amount * 24.0);
-    float4 blur = image.Sample(textureSampler, puv) * 0.36;
-    blur += image.Sample(textureSampler, clamp(puv + float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv + float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    float grain = hash12(floor(uv * pixels / max(2.0, block * 0.35)) + floor(elapsed_time * speed * 12.0));
-    float gray = luma3(blur.rgb);
-    float3 tint = float3(0.080, 0.100, 0.120);
-    float3 protected_rgb = lerp(blur.rgb, tint * (0.45 + gray * 0.55), 0.35 * intensity);
-    protected_rgb = lerp(protected_rgb, float3(gray, gray, gray), 0.35);
-    protected_rgb += (grain - 0.5) * 0.22 * intensity;
-    protected_rgb *= 1.0 - 0.20 * saturate(intensity);
-    float blend = saturate(0.82 + amount * 0.16);
-    float3 out_rgb = lerp(color.rgb, protected_rgb, blend);
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 plane = float2(uv.x * aspect, uv.y);
+    float2 origin = float2(center_x * aspect, center_y);
+    float dist = length(plane - origin);
+    float frame_reach = length(float2(aspect * 0.5, 0.5));
+    float wipe_radius = saturate(amount) * frame_reach * 1.5;
+    float cover = saturate((wipe_radius - dist) * 12.0) * saturate(opacity);
+
+    float2 pixels = max(uv_size, float2(1.0, 1.0));
+    float crush = clamp(intensity, 0.0, 2.0);
+    float crush_n = crush * 0.5;
+    float block = max(lerp(28.0, 76.0, crush_n), 0.001);
+    float2 cells = max(pixels / block, float2(1.0, 1.0));
+    float2 cell_uv = (floor(uv * cells) + 0.5) / max(cells, float2(0.001, 0.001));
+    cell_uv = clamp(cell_uv, 0.0, 1.0);
+
+    float2 step_uv = max(uv_pixel_interval, float2(0.001, 0.001)) * (14.0 + amount * 26.0);
+    float4 kernel = image.Sample(textureSampler, cell_uv) * 0.20;
+    kernel += image.Sample(textureSampler, clamp(cell_uv + float2(step_uv.x, 0.0), 0.0, 1.0)) * 0.10;
+    kernel += image.Sample(textureSampler, clamp(cell_uv - float2(step_uv.x, 0.0), 0.0, 1.0)) * 0.10;
+    kernel += image.Sample(textureSampler, clamp(cell_uv + float2(0.0, step_uv.y), 0.0, 1.0)) * 0.10;
+    kernel += image.Sample(textureSampler, clamp(cell_uv - float2(0.0, step_uv.y), 0.0, 1.0)) * 0.10;
+    kernel += image.Sample(textureSampler, clamp(cell_uv + float2(step_uv.x, step_uv.y), 0.0, 1.0)) * 0.10;
+    kernel += image.Sample(textureSampler, clamp(cell_uv + float2(step_uv.x, -step_uv.y), 0.0, 1.0)) * 0.10;
+    kernel += image.Sample(textureSampler, clamp(cell_uv + float2(-step_uv.x, step_uv.y), 0.0, 1.0)) * 0.10;
+    kernel += image.Sample(textureSampler, clamp(cell_uv + float2(-step_uv.x, -step_uv.y), 0.0, 1.0)) * 0.10;
+
+    float grain_cell = max(block * 0.4, 2.0);
+    float tick = floor(elapsed_time * max(speed, 0.0) * 1.5);
+    float grain = hash12(floor(uv * pixels / max(grain_cell, 0.001)) + tick);
+    float gray = luma3(kernel.rgb);
+    float3 plate = lerp(kernel.rgb, float3(gray, gray, gray), saturate(0.50 + 0.40 * crush_n));
+    plate = lerp(plate, float3(0.080, 0.100, 0.120) * (0.40 + gray), saturate(0.22 + 0.40 * crush_n));
+    plate += (grain - 0.5) * 0.16 * crush;
+    float sweep = frac(elapsed_time * max(speed, 0.0) * 0.20);
+    float band = saturate(1.0 - abs((uv.x + uv.y) * 0.5 - sweep) * 18.0);
+    plate += band * 0.06 * crush_n;
+    plate = saturate(plate);
+
+    float3 out_rgb = lerp(source.rgb, plate, cover);
+    return float4(out_rgb, alphaOut(source.a));
 }
 
 technique Draw
