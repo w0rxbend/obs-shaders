@@ -13,15 +13,59 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float elapsed_time;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.93;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.83;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,22 +99,14 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
@@ -79,10 +115,10 @@ float4 mainImage(VertData v_in) : TARGET
     float4 color = image.Sample(textureSampler, uv);
     float2 pixels = max(float2(1.0, 1.0), uv_size);
     float block = lerp(12.0, 42.0, saturate(amount * 0.7));
-    float2 cells = max(float2(1.0, 1.0), pixels / block);
+    float2 cells = max(float2(1.0, 1.0), pixels / max(block, 0.001));
     float2 puv = (floor(uv * cells) + 0.5) / cells;
     float2 px = uv_pixel_interval * (8.0 + amount * 24.0);
-    float4 blur = image.Sample(textureSampler, puv) * 0.36;
+    float4 blur = image.Sample(textureSampler, clamp(puv, 0.0, 1.0)) * 0.36;
     blur += image.Sample(textureSampler, clamp(puv + float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
     blur += image.Sample(textureSampler, clamp(puv - float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
     blur += image.Sample(textureSampler, clamp(puv + float2(0.0, px.y), 0.0, 1.0)) * 0.16;
