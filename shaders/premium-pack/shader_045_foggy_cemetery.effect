@@ -1,27 +1,70 @@
 // Filename: shader_045_foggy_cemetery.effect
 // Category: Horror / supernatural pack
 // Effect: Foggy cemetery
-// Visual principle: crushed shadows, color-biased darkness, pulse timing, and unstable edges.
-// What makes it cool: it adds dread by making the frame feel reactive and contaminated.
+// Visual principle: cool graveyard grade, ground mist heavier at the bottom and edges, drifting fog banks, and faint headstones.
+// What makes it cool: night fog settles over the shot while a talking head stays recognizable.
 // Suggested source type: webcam, horror games, video source, dramatic scenes
 // Suggested shader-chain combinations: this shader -> ghost double image -> dark vignette
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.85;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.19;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,11 +98,33 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
+float fogNoise(float2 p)
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float2 cell = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash12(cell);
+    float b = hash12(cell + float2(1.0, 0.0));
+    float c = hash12(cell + float2(0.0, 1.0));
+    float d = hash12(cell + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float headstoneMask(float2 uv, float aspect)
+{
+    float columns = max(aspect, 0.001) * 5.0;
+    float along = uv.x * columns;
+    float column = floor(along);
+    float seed = hash12(float2(column, 5.0));
+    float present = step(0.62, seed);
+    float local_x = frac(along) - 0.5;
+    float half_w = 0.10 + seed * 0.06;
+    float shaft = 1.0 - smoothstep(half_w, half_w + 0.03, abs(local_x));
+    float foot = smoothstep(0.70, 0.80, uv.y);
+    float crown = 0.84 + seed * 0.06;
+    float body = 1.0 - smoothstep(crown, crown + 0.02, uv.y);
+    float peak = 1.0 - smoothstep(0.0, half_w, abs(local_x) + max(uv.y - crown, 0.0) * 2.2);
+    return present * shaft * foot * max(body, peak);
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,25 +133,70 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
-    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
+    float2 texel = 1.0 / max(uv_size, float2(1.0, 1.0));
+    float3 left_rgb = image.Sample(textureSampler, clamp(uv - float2(texel.x * 8.0, 0.0), 0.0, 1.0)).rgb;
+    float3 right_rgb = image.Sample(textureSampler, clamp(uv + float2(texel.x * 8.0, 0.0), 0.0, 1.0)).rgb;
+    float3 up_rgb = image.Sample(textureSampler, clamp(uv - float2(0.0, texel.y * 8.0), 0.0, 1.0)).rgb;
+    float3 down_rgb = image.Sample(textureSampler, clamp(uv + float2(0.0, texel.y * 8.0), 0.0, 1.0)).rgb;
+    float3 soft = (color.rgb * 2.0 + left_rgb + right_rgb + up_rgb + down_rgb) * (1.0 / 6.0);
+
     float gray = luma3(color.rgb);
-    float3 curse = float3(0.150, 0.380, 0.220);
-    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
-    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
-    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
-    out_rgb.r += pulse * 0.10 * intensity;
-    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float half_frame = length(float2(aspect * 0.5, 0.5));
+    float edge = length(from_center) / max(half_frame, 0.001);
+
+    float grade = saturate(0.48 * intensity);
+    float3 grave = float3(gray * 0.70, gray * 0.80, gray * 0.76);
+    float3 graded = lerp(color.rgb, grave, grade);
+    graded *= gray / max(luma3(graded), 0.001);
+    float contrast = 1.0 + 0.20 * min(max(intensity, 0.0), 1.5);
+    float crush = lerp(0.5, 0.48, saturate(intensity));
+    graded = (graded - 0.5) * contrast + crush;
+
+    // Wrap the clock so a long stream does not lose fog-phase precision.
+    float clock = elapsed_time - floor(elapsed_time * (1.0 / 180.0)) * 180.0;
+    float drift = clock * speed;
+    float2 field = float2(uv.x * aspect, uv.y);
+    float n1 = fogNoise(field * 3.1 + float2(drift * 0.16, drift * 0.04));
+    float n2 = fogNoise(field * 6.2 - float2(drift * 0.09, drift * 0.05));
+    float banks = lerp(n1, n2, 0.42);
+
+    // uv.y is 0 at the top and 1 at the bottom in OBS, so mist sits on the ground.
+    float density = min(max(amount, 0.0), 1.5);
+    float bottom = smoothstep(0.32, 1.0, uv.y);
+    float edge_fog = smoothstep(0.22, 1.05, edge);
+    float subject = 1.0 - smoothstep(0.0, 0.62, edge);
+    float fog_amt = (bottom * 0.48 + edge_fog * 0.24) * density;
+    fog_amt += (0.14 + 0.10 * banks) * density;
+    fog_amt *= lerp(0.72, 1.0, banks);
+    fog_amt *= lerp(1.0, 0.42, subject);
+    fog_amt = min(fog_amt * min(max(intensity, 0.0), 1.35), 0.58);
+
+    graded = lerp(graded, soft, saturate(fog_amt));
+    float3 mist = lerp(float3(0.56, 0.64, 0.61), float3(0.36, 0.48, 0.43), bottom);
+    graded = lerp(graded, mist, fog_amt);
+
+    float stones = headstoneMask(uv, aspect) * saturate(fog_amt * 1.6);
+    graded = lerp(graded, float3(0.07, 0.10, 0.08), stones * 0.34);
+
+    float grain_step = floor(clock * 4.0);
+    float2 grain_cell = floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.35);
+    float grain = hash12(grain_cell + float2(grain_step, 3.0)) - 0.5;
+    graded += grain * 0.018 * saturate(intensity);
+
+    float3 out_rgb = lerp(color.rgb, saturate(graded), saturate(opacity));
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
