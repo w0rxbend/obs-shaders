@@ -1,15 +1,38 @@
 // Performance: low
 // Webcam safe: yes
-// Preserves alpha: no
+// Preserves alpha: yes
 // Use case: Near-infrared photography look — vegetation/skin appear bright, sky dark, high-contrast B&W with red-tinted whites
 // Chain order: Apply as a standalone look; mutually exclusive with thermal-vision; follow with film-grain for authenticity
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float ir_strength = 0.9;  // 0.0–1.0
-uniform float red_tint    = 0.15; // 0.0–0.5  (red blush in bright areas)
-uniform float contrast    = 1.8;  // 1.0–3.0
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float ir_strength <
+    string label = "IR Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.9;
+
+uniform float red_tint <
+    string label = "Red Tint";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.15;
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.8;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,7 +49,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,7 +78,7 @@ float4 mainImage(VertData v_in) : TARGET
 
     // --- Red tint in bright areas (wood effect / Aerochrome look) ---
     // Bright regions shift toward pink/red, dark regions stay neutral
-    float bright_mask = saturate(luma - 0.4) / 0.6; // 0 below 0.4 luma, 1 at full white
+    float bright_mask = saturate(luma - 0.4) / max(0.6, 0.001); // 0 below 0.4 luma, 1 at full white
     col.r = col.r + bright_mask * red_tint;
     col.g = col.g - bright_mask * red_tint * 0.3;
     col.b = col.b - bright_mask * red_tint * 0.5;
