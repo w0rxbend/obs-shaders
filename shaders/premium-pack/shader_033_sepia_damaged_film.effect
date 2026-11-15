@@ -1,7 +1,7 @@
 // Filename: shader_033_sepia_damaged_film.effect
 // Category: Retro analog pack
 // Effect: Sepia damaged film
-// Visual principle: scanlines, field jitter, chroma drift, and time-varying tape damage.
+// Visual principle: sepia tone with gate weave, scratches, dust, grain, and slow flicker.
 // What makes it cool: it sells nostalgic hardware instability with cheap procedural math.
 // Suggested source type: game capture, retro scenes, video source, screen capture
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> vignette
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.09;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,45 +98,74 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
-    if (!preserve_alpha)
+    if (preserve_alpha)
     {
-        a = 1.0;
+        return sampled_alpha;
     }
-    return a * saturate(opacity);
+    return saturate(sampled_alpha);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
     float t = elapsed_time * speed;
-    float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
-    float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
-    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
-    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
-    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
-    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
-    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
-    float rch = image.Sample(textureSampler, uv_r).r;
-    float gch = image.Sample(textureSampler, uv_g).g;
-    float bch = image.Sample(textureSampler, uv_b).b;
-    float noise = hash12(floor(uv * uv_size / 3.0) + floor(t * 20.0)) - 0.5;
-    float3 tint = float3(0.950, 0.880, 0.720);
-    float3 out_rgb = float3(rch, gch, bch) * scan;
-    out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
-    out_rgb += noise * 0.08 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float damage = max(amount, 0.0);
+    float grade = saturate(intensity);
+
+    float weave_x = sin(t * 1.7) * 0.0035 * damage;
+    float weave_y = sin(t * 1.15 + 0.6) * 0.0022 * damage;
+    float2 film_uv = clamp(uv + float2(weave_x, weave_y), 0.0, 1.0);
+    float3 filmed = image.Sample(textureSampler, film_uv).rgb;
+
+    float luma = luma3(filmed);
+    float3 sepia = float3(luma * 1.05 + 0.04, luma * 0.88 + 0.02, luma * 0.60);
+    float3 graded = lerp(filmed, sepia, grade * 0.88);
+    float contrast = 1.0 + min(grade * 0.12, 0.16);
+    graded = (graded - 0.5) * contrast + 0.5;
+    graded *= 1.0 + sin(t * 1.6) * 0.03 * damage;
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float corner = 0.5 * length(float2(aspect, 1.0));
+    float edge = length(from_center) / max(corner, 0.001);
+    graded *= 1.0 - smoothstep(0.50, 1.25, edge) * 0.38 * grade;
+
+    float bucket = floor(t * 0.65);
+    float break_y = hash12(float2(floor(uv.y * 70.0), bucket));
+    float scratch = smoothstep(0.0025, 0.0, abs(uv.x - hash12(float2(bucket, 2.2))));
+    scratch *= step(0.42, hash12(float2(bucket, 9.1))) * step(0.28, break_y);
+    float scratch2 = smoothstep(0.0012, 0.0, abs(uv.x - hash12(float2(bucket, 5.4))));
+    scratch2 *= step(0.68, hash12(float2(bucket, 12.7))) * step(0.22, break_y);
+    float scratch_w = saturate((scratch + scratch2) * 0.85 * damage);
+    graded = lerp(graded, float3(0.94, 0.84, 0.64), scratch_w);
+
+    float hair_on = step(0.78, hash12(float2(bucket, 19.0)));
+    float hair_y = hash12(float2(bucket, 23.0));
+    float hair = smoothstep(0.0035, 0.0, abs(uv.y - hair_y - (uv.x - 0.5) * 0.06));
+    graded = lerp(graded, graded * 0.32, hair * hair_on * saturate(0.55 * damage));
+
+    float2 field = uv * float2(aspect, 1.0) * 26.0 + float2(bucket, 0.0);
+    float2 cell = floor(field);
+    float2 local = field - cell;
+    float spawn = hash12(cell);
+    float2 spot = float2(hash12(cell + float2(3.1, 1.7)), hash12(cell + float2(8.2, 4.4)));
+    float speck_dist = length(local - spot);
+    float dust_dark = smoothstep(0.09, 0.0, speck_dist) * step(0.975, spawn);
+    float dust_light = smoothstep(0.06, 0.0, speck_dist) * step(0.992, spawn);
+    graded = lerp(graded, graded * 0.22, dust_dark * saturate(0.8 * damage));
+    graded = lerp(graded, float3(0.93, 0.86, 0.70), dust_light * saturate(0.7 * damage));
+
+    float2 pixels = max(uv_size, float2(1.0, 1.0));
+    float grain_tick = floor(t * 8.0);
+    float grain = hash12(floor(uv * pixels * 0.33) + float2(grain_tick, grain_tick * 0.37)) - 0.5;
+    graded += grain * 0.05 * grade * float3(1.0, 0.92, 0.74);
+
+    float3 out_rgb = lerp(color.rgb, saturate(graded), saturate(opacity));
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
