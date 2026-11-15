@@ -10,6 +10,8 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 uniform float elapsed_time;
@@ -19,19 +21,61 @@ uniform int privacy_mode = 2;
 
 // Required controls. Strength controls are normalized multipliers around the
 // selected mode preset. Defaults are tuned for unreadable text/code at 1080p.
-uniform float blur_strength       = 1.0;  // 0.0-1.5
-uniform float pixelation_strength = 1.0;  // 0.0-1.5
-uniform float privacy_opacity     = 1.0;  // 0.0-1.0
-uniform float dim_amount          = 1.0;  // 0.0-1.5
-uniform float desaturation        = 1.0;  // 0.0-1.5
-uniform float noise_amount        = 1.0;  // 0.0-1.5
+uniform float blur_strength <
+    string label = "Blur Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 1.0;
+uniform float pixelation_strength <
+    string label = "Pixelation Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 1.0;
+uniform float privacy_opacity <
+    string label = "Privacy Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+uniform float dim_amount <
+    string label = "Dim Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 1.0;
+uniform float desaturation <
+    string label = "Desaturation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 1.0;
+uniform float noise_amount <
+    string label = "Noise Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 1.0;
 
 uniform bool enable_pixelation = true;
 uniform bool enable_blur       = true;
 uniform bool enable_noise      = true;
 
 // Additional optional control for the frosted-glass wash.
-uniform float frosted_amount = 1.0; // 0.0-1.5
+uniform float frosted_amount <
+    string label = "Frosted Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 1.0;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -48,7 +92,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -112,12 +156,12 @@ float2 pixelatedUV(float2 uv, float block_pixels)
     [branch]
     if (source_pixels.x <= 1.0 || source_pixels.y <= 1.0)
     {
-        source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.000001, 0.000001)));
+        source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.001, 0.001)));
     }
 
     float block_size = max(1.0, block_pixels);
-    float2 cells = max(float2(1.0, 1.0), source_pixels / block_size);
-    return (floor(uv * cells) + 0.5) / cells;
+    float2 cells = max(float2(1.0, 1.0), source_pixels / max(block_size, 0.001));
+    return (floor(uv * cells) + 0.5) / max(cells, float2(0.001, 0.001));
 }
 
 float4 gaussianBlur9(float2 uv, float blur_pixels)
@@ -171,11 +215,11 @@ float3 applyPrivacyLook(float3 rgb,
         [branch]
         if (source_pixels.x <= 1.0 || source_pixels.y <= 1.0)
         {
-            source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.000001, 0.000001)));
+            source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.001, 0.001)));
         }
 
         float noise_cell = max(2.0, block_pixels * 0.45);
-        float2 noise_uv = floor(uv * source_pixels / noise_cell);
+        float2 noise_uv = floor(uv * source_pixels / max(noise_cell, 0.001));
         float time_step = floor(elapsed_time * 12.0);
         float grain = hash12(noise_uv + time_step);
         float fine_grain = hash12(floor(uv * source_pixels * 0.5) + time_step * 3.17);
