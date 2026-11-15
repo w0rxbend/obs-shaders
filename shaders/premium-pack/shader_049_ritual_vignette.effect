@@ -6,22 +6,66 @@
 // Suggested source type: webcam, horror games, video source, dramatic scenes
 // Suggested shader-chain combinations: this shader -> ghost double image -> dark vignette
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.17;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,27 +83,13 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
 }
 
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,25 +98,58 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
-    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
-    float gray = luma3(color.rgb);
-    float3 curse = float3(0.850, 0.050, 0.040);
-    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
-    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
-    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
-    out_rgb.r += pulse * 0.10 * intensity;
-    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float reach = max(length(float2(aspect * 0.5, 0.5)), 0.001);
+    float norm = length(from_center) / reach;
+
+    float clock = fmod(elapsed_time, 1024.0);
+    float pulse = 0.5 + 0.5 * sin(clock * speed * 1.5);
+    float wobble = sin(from_center.y * 16.0 + clock * speed * 2.2)
+        * sin(from_center.x * 12.0 - clock * speed * 1.4);
+    float edge_norm = norm + wobble * 0.03 * amount * (0.65 + 0.35 * pulse);
+
+    float vignette = smoothstep(0.30, 0.96, edge_norm);
+    float ring_r = 0.58 + 0.035 * pulse;
+    float ring_band = max(0.018, 0.012 + 0.008 * amount);
+    float ring = 1.0 - smoothstep(0.0, ring_band, abs(edge_norm - ring_r));
+
+    float2 dir = from_center / max(length(from_center), 0.001);
+    float smear_px = (2.0 + 6.0 * pulse) * vignette * intensity;
+    float2 smear_uv = clamp(uv + dir * uv_pixel_interval * smear_px, 0.0, 1.0);
+    float3 edge_rgb = image.Sample(textureSampler, smear_uv).rgb;
+    float3 base = lerp(color.rgb, edge_rgb, saturate(vignette * 0.40));
+
+    float gray = luma3(base);
+    float shadow = 1.0 - smoothstep(0.04, 0.42, gray);
+    float contrast = 1.0 + 0.28 * intensity * lerp(0.20, 1.0, vignette);
+    float3 crushed = (base - 0.5) * contrast + 0.5;
+    crushed -= shadow * 0.08 * intensity * vignette;
+
+    float dark = saturate(vignette * (0.55 + 0.25 * pulse) * intensity * 0.75);
+    crushed *= lerp(1.0, 0.28, dark);
+
+    float bias = saturate(vignette * amount * 0.62);
+    float3 ember = crushed * float3(1.20, 0.48, 0.32) + float3(0.08, 0.012, 0.006) * vignette;
+    float3 graded = lerp(crushed, ember, bias);
+
+    float ring_w = saturate(ring * amount * 0.40 * (0.70 + 0.30 * pulse));
+    graded = lerp(graded, saturate(graded + float3(0.45, 0.06, 0.02)), ring_w);
+
+    graded = saturate(graded);
+    float3 out_rgb = lerp(color.rgb, graded, saturate(opacity));
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
