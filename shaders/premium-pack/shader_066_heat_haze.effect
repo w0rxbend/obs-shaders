@@ -11,17 +11,54 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.93;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.19;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,54 +76,63 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-float hash12(float2 p)
+float hash21(float2 p)
 {
     float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
+float valueNoise(float2 p)
 {
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float2 cell = floor(p);
+    float2 blend = frac(p);
+    float2 smooth_blend = blend * blend * (3.0 - 2.0 * blend);
+    float corner00 = hash21(cell);
+    float corner10 = hash21(cell + float2(1.0, 0.0));
+    float corner01 = hash21(cell + float2(0.0, 1.0));
+    float corner11 = hash21(cell + float2(1.0, 1.0));
+    float row0 = lerp(corner00, corner10, smooth_blend.x);
+    float row1 = lerp(corner01, corner11, smooth_blend.x);
+    return lerp(row0, row1, smooth_blend.y);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 center = float2(center_x, center_y);
-    float2 p = uv - center;
-    float t = elapsed_time * speed;
-    float radius = length(p);
-    float wave = sin(radius * 24.0 - t * 3.0) * 0.025 * amount * intensity;
-    float bend = dot(p, p) * (0.22 + 1.0 * 0.025) * amount;
-    float2 dir = normalize(p + float2(0.0001, 0.0002));
-    float2 uv = center + p / (1.04 + abs(wave) + bend * 0.2) + dir * wave + p * bend;
-    float4 warped = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float4 source = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float spatial = 4.0 + amount * 4.0;
+    float2 field = float2((uv.x - center_x) * aspect, uv.y - center_y) * spatial;
+    // UV y grows downward. Advancing one noise period keeps the rise seamless.
+    field.y += frac(elapsed_time * speed);
+
+    float coarse = valueNoise(field);
+    float fine = valueNoise(field * 2.07 + float2(5.2, 1.3));
+    float shimmer_x = coarse * 2.0 - 1.0;
+    float shimmer_y = (fine * 2.0 - 1.0) * 0.45;
+    float displacement_scale = 0.012 * intensity * amount;
+    float2 displacement = float2(shimmer_x, shimmer_y) * displacement_scale;
+
+    float2 sample_uv = clamp(uv + displacement, float2(0.0, 0.0), float2(1.0, 1.0));
+    float4 warped = image.Sample(textureSampler, sample_uv);
+    float3 rgb = lerp(source.rgb, warped.rgb, saturate(opacity));
+    return float4(rgb, alphaOut(source.a));
 }
 
 technique Draw
