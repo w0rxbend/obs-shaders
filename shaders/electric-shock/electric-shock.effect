@@ -7,10 +7,33 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float elapsed_time;
-uniform float shock_speed     = 8.0;  // 1.0–20.0
-uniform float rgb_split       = 0.02; // 0.0–0.04
-uniform float flash_intensity = 0.4;  // 0.0–1.0
+
+uniform float shock_speed <
+    string label = "Shock Speed";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 20.0;
+    float step = 0.1;
+> = 2.5;
+
+uniform float rgb_split <
+    string label = "RGB Split";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.04;
+    float step = 0.001;
+> = 0.02;
+
+uniform float flash_intensity <
+    string label = "Flash Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -27,7 +50,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData v_out;
     v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    v_out.uv  = v_in.uv;
+    v_out.uv  = v_in.uv * uv_scale + uv_offset;
     return v_out;
 }
 
@@ -73,7 +96,7 @@ float4 mainImage(VertData v_in) : TARGET
     float twitch_line = step(0.97, frac(uv.y * 80.0 + r1 * 40.0));
     col = lerp(col, float3(1.0, 1.0, 1.0), twitch_line * active * 0.5);
 
-    return float4(col, alpha);
+    return float4(saturate(col), alpha);
 }
 
 technique Draw
