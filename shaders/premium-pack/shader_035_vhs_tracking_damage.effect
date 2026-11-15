@@ -1,27 +1,65 @@
 // Filename: shader_035_vhs_tracking_damage.effect
 // Category: Retro analog pack
 // Effect: VHS tracking damage
-// Visual principle: scanlines, field jitter, chroma drift, and time-varying tape damage.
+// Visual principle: one slow tracking bar tears horizontal rows, smears chroma, and drops snow while the rest of the frame stays readable.
 // What makes it cool: it sells nostalgic hardware instability with cheap procedural math.
 // Suggested source type: game capture, retro scenes, video source, screen capture
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> vignette
 // Performance cost: medium
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.85;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 0.65;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +77,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,45 +93,55 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float scan = 0.72 + 0.28 * sin(uv.y * uv_size.y * 3.14159);
-    float field = step(0.5, frac(uv.y * uv_size.y * 0.5 + floor(t * 6.0)));
-    float band = sin(uv.y * 42.0 + t * 5.0) * 0.006 * amount;
-    float tear = (hash12(float2(floor(uv.y * 18.0), floor(t * 3.0))) - 0.5) * 0.020 * amount;
-    float2 uv_r = clamp(uv + float2( band + tear, 0.0), 0.0, 1.0);
-    float2 uv_g = clamp(uv + float2(-band * 0.35, field * uv_pixel_interval.y * 1.5), 0.0, 1.0);
-    float2 uv_b = clamp(uv + float2(-band - tear * 0.5, 0.0), 0.0, 1.0);
-    float rch = image.Sample(textureSampler, uv_r).r;
-    float gch = image.Sample(textureSampler, uv_g).g;
-    float bch = image.Sample(textureSampler, uv_b).b;
-    float noise = hash12(floor(uv * uv_size / 3.0) + floor(t * 20.0)) - 0.5;
-    float3 tint = float3(0.900, 0.200, 0.180);
-    float3 out_rgb = float3(rch, gch, bch) * scan;
-    out_rgb = lerp(out_rgb, tint * luma3(out_rgb), 0.18 * intensity);
-    out_rgb += noise * 0.08 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    // Wrap the clock so the tracking hash stays stable on a long stream.
+    float t = fmod(elapsed_time * speed, 1024.0);
+    float tick = floor(t * 1.5);
+    float band_center = saturate(center_y + sin(t * 0.7) * 0.08 * amount);
+    float half_h = max(0.035 + 0.055 * amount, 0.001);
+    float from_band = abs(uv.y - band_center);
+    float band = 1.0 - smoothstep(half_h * 0.45, half_h, from_band);
+    float line_half = max(uv_pixel_interval.y * 1.5, 0.001);
+    float head_line = 1.0 - smoothstep(line_half, line_half * 3.0, from_band);
+
+    float row_id = floor(uv.y * 64.0);
+    float row_rand = hash12(float2(row_id, tick));
+    float tear = (row_rand - 0.5) * (0.012 + 0.050 * band) * amount;
+    tear += (center_x - 0.5) * 0.040 * band;
+    float field = step(0.5, frac(uv.y * max(uv_size.y, 1.0) * 0.5));
+    float2 torn_uv = clamp(uv + float2(tear, field * uv_pixel_interval.y * band), 0.0, 1.0);
+    float chroma = (0.003 + 0.008 * band) * amount;
+    float2 uv_r = clamp(torn_uv + float2(chroma, 0.0), 0.0, 1.0);
+    float2 uv_b = clamp(torn_uv - float2(chroma * 0.8, 0.0), 0.0, 1.0);
+
+    float3 torn_rgb = float3(
+        image.Sample(textureSampler, uv_r).r,
+        image.Sample(textureSampler, torn_uv).g,
+        image.Sample(textureSampler, uv_b).b);
+    float snow = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.5) + float2(tick, 4.0)) - 0.5;
+    torn_rgb += snow * 0.22 * intensity * band;
+    float spark = 0.5 + 0.5 * sin(t * 2.4);
+    torn_rgb += head_line * (0.08 + 0.10 * spark) * intensity;
+    float y = luma3(torn_rgb);
+    torn_rgb = lerp(torn_rgb, float3(y, y, y), saturate(0.55 * band));
+    float scan = 0.90 + 0.10 * sin(uv.y * uv_size.y * 3.14159);
+    float3 effect_rgb = saturate(lerp(color.rgb, torn_rgb, band) * scan);
+    float3 shown = lerp(color.rgb, effect_rgb, saturate(opacity));
+    return float4(shown, alphaOut(color.a));
 }
 
 technique Draw
