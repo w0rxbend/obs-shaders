@@ -3,10 +3,23 @@
 // strength : warp intensity  (0.0–1.0, default 0.5)
 // zoom     : overall zoom factor (0.5–2.0, default 1.0)
 
-uniform float strength = 0.5;
-uniform float zoom     = 1.0;
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float zoom <
+    string label = "Zoom";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
 
 uniform texture2d image;
+uniform float2 uv_size;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -23,22 +36,18 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Map uv to centered [-1, 1] space
+    // Center in [-1, 1] and stretch x so the lens stays circular on screen.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 p = uv * 2.0 - 1.0;
+    p.x *= aspect;
 
-    float r = length(p);
+    // r' = r * (1 + strength * r^2), applied to the offset. No r divide.
+    float r2 = dot(p, p);
+    float2 pWarp = p * (1.0 + strength * r2);
+    pWarp.x /= max(aspect, 0.001);
 
-    // Fisheye: r' = r * (1 + strength * r^2)
-    float r2      = r * r;
-    float rWarp   = r * (1.0 + strength * r2);
-
-    // Apply zoom then remap back: scale the warped direction by rWarp
-    float2 pWarp  = (r > 0.0001) ? (p / r) * rWarp : p;
-
-    // Apply zoom (larger zoom = more zoomed in, showing less border black)
-    float2 uvWarp = (pWarp / zoom + 1.0) * 0.5;
-
-    // Clamp to valid range — OBS returns black outside [0,1]
+    // Larger zoom samples closer to center. Guard a zero slider value.
+    float2 uvWarp = (pWarp / max(zoom, 0.001) + 1.0) * 0.5;
     uvWarp = saturate(uvWarp);
 
     return image.Sample(textureSampler, uvWarp);
