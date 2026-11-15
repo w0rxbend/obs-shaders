@@ -1,27 +1,70 @@
 // Filename: shader_048_blood_moon_grade.effect
 // Category: Horror / supernatural pack
 // Effect: Blood moon grade
-// Visual principle: crushed shadows, color-biased darkness, pulse timing, and unstable edges.
+// Visual principle: crushed shadows, a slow crimson cast, and a dark red rim, like light under a blood moon.
 // What makes it cool: it adds dread by making the frame feel reactive and contaminated.
 // Suggested source type: webcam, horror games, video source, dramatic scenes
 // Suggested shader-chain combinations: this shader -> ghost double image -> dark vignette
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.09;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,27 +82,13 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
 }
 
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,25 +97,46 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float pulse = 0.5 + 0.5 * sin(elapsed_time * speed * 2.4);
-    float edge = smoothstep(0.15, 0.82, length((uv - float2(center_x, center_y)) * float2(1.1, 1.0)));
-    float gray = luma3(color.rgb);
-    float3 curse = float3(0.150, 0.380, 0.220);
-    float3 out_rgb = lerp(color.rgb, curse * (gray + 0.15), 0.45 * intensity);
-    out_rgb = (out_rgb - 0.5) * (1.35 + pulse * 0.35 * amount) + 0.5;
-    out_rgb *= 1.0 - edge * (0.55 + 0.20 * pulse) * intensity;
-    out_rgb.r += pulse * 0.10 * intensity;
-    out_rgb += (hash12(floor(uv * uv_size / 4.0) + floor(elapsed_time * 10.0)) - 0.5) * 0.05;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float3 src = color.rgb;
+    float gray = luma3(src);
+    float drive = max(intensity, 0.0);
+
+    // Wrap the clock so a long stream does not freeze the pulse phase.
+    float clock = elapsed_time - floor(elapsed_time * (1.0 / 120.0)) * 120.0;
+    float pulse = 0.5 + 0.5 * sin(clock * speed * 1.15);
+    float blood = saturate(amount * 0.50 * lerp(0.82, 1.12, pulse) * drive);
+
+    float lift = smoothstep(0.0, 0.42, gray);
+    float3 crushed = lerp(src, src * lerp(0.50, 1.0, lift), saturate(drive));
+    float3 moon = float3(
+        crushed.r * (1.0 + 0.22 * blood) + 0.05 * blood,
+        crushed.g * lerp(1.0, 0.58, blood),
+        crushed.b * lerp(1.0, 0.36, blood)
+    );
+
+    float shade = 1.0 - smoothstep(0.05, 0.50, gray);
+    moon = lerp(moon, float3(0.16, 0.015, 0.012), shade * 0.65 * blood);
+
+    // Scale x by aspect so the blood rim stays circular on widescreen.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float reach = max(length(float2(aspect * 0.5, 0.5)), 0.001);
+    float edge = smoothstep(0.28, 1.05, length(from_center) / reach);
+    moon = lerp(moon, moon * float3(0.45, 0.12, 0.08), edge * saturate(0.72 * drive));
+
+    float3 graded = saturate(moon);
+    float grade_mix = saturate(opacity) * saturate(drive);
+    float3 out_rgb = lerp(src, graded, grade_mix);
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
