@@ -6,12 +6,42 @@
 // Chain order: early in chain; add grain/noise after for atmosphere
 
 uniform float4x4 ViewProj;
-uniform float blue_tint     = 0.5;  // 0.0 – 1.0
-uniform float silver_amount = 0.4;  // 0.0 – 1.0
-uniform float contrast      = 1.6;  // 1.0 – 3.0
-uniform float vignette      = 0.45; // 0.0 – 1.0
-
 uniform texture2d image;
+
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float blue_tint <
+    string label = "Blue Tint";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float silver_amount <
+    string label = "Silver Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.6;
+
+uniform float vignette <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.45;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -29,7 +59,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -63,8 +93,7 @@ float4 mainImage(VertData v_in) : TARGET
     float vig = 1.0 - clamp(vd * vignette * 1.1, 0.0, 0.92);
     c *= vig;
 
-    c = clamp(c, 0.0, 1.0);
-    return float4(c, col.a);
+    return float4(saturate(c), col.a);
 }
 
 technique Draw
