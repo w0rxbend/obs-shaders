@@ -5,11 +5,45 @@
 // Use case: Adds solid black letterbox bars top and bottom with optional vignette
 // Chain order: Apply last in chain; stacks well over any color grade
 
-uniform float bar_height       = 0.12; // 0.0 – 0.4
-uniform float vignette_strength = 0.3; // 0.0 – 1.0
-uniform float bar_color_r      = 0.0;
-uniform float bar_color_g      = 0.0;
-uniform float bar_color_b      = 0.0;
+uniform float bar_height <
+    string label = "Bar height";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.4;
+    float step = 0.01;
+> = 0.12;
+
+uniform float vignette_strength <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+
+uniform float bar_color_r <
+    string label = "Bar red";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.0;
+
+uniform float bar_color_g <
+    string label = "Bar green";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.0;
+
+uniform float bar_color_b <
+    string label = "Bar blue";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.0;
 
 uniform texture2d image;
 
@@ -29,9 +63,9 @@ float4 mainImage(VertData v_in) : TARGET
     float2 uv  = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    float3 bar_col = float3(bar_color_r, bar_color_g, bar_color_b);
+    float3 bar_col = saturate(float3(bar_color_r, bar_color_g, bar_color_b));
 
-    // Determine if this pixel is inside a letterbox bar.
+    // Cap below 0.5 so the two bars cannot meet and black out the frame.
     float h = clamp(bar_height, 0.0, 0.49);
     bool  in_bar = (uv.y < h) || (uv.y > (1.0 - h));
 
@@ -47,9 +81,8 @@ float4 mainImage(VertData v_in) : TARGET
 
     float2 centered = float2(uv.x - 0.5, vy - 0.5);
     float  dist     = length(centered);
-    float  vignette = smoothstep(0.3, 0.85, dist) * vignette_strength;
+    float  vignette = smoothstep(0.3, 0.85, dist) * saturate(vignette_strength);
 
-    col.rgb *= (1.0 - vignette);
-    col.a    = 1.0;
+    col.rgb = saturate(col.rgb * (1.0 - vignette));
     return col;
 }
