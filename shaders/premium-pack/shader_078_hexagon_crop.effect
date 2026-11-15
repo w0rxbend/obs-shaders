@@ -11,17 +11,61 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.09;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 0.83;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,60 +83,51 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-float hash12(float2 p)
+float hexagonDistance(float2 p, float radius)
 {
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
-float alphaOut(float sampled_alpha)
-{
-    float a = sampled_alpha;
-    [branch]
-    if (!preserve_alpha)
-    {
-        a = 1.0;
-    }
-    return a * saturate(opacity);
+    float2 sector = float2(-0.866025404, 0.5);
+    float flat_half = 0.577350269 * radius;
+    p = abs(p);
+    p -= 2.0 * min(dot(sector, p), 0.0) * sector;
+    p -= float2(clamp(p.x, -flat_half, flat_half), radius);
+    return length(p) * sign(p.y);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float2 p = uv - float2(center_x, center_y);
-    float jag = hash12(floor(uv * 48.0) + floor(elapsed_time * speed)) - 0.5;
-    float d = max(abs(p.x) - 0.43, abs(p.y) - 0.39);
-    float mask = 1.0 - smoothstep(0.0, 0.018 * amount, d);
-    float border = 1.0 - smoothstep(0.018, 0.055, abs(d));
-    float pulse = 0.55 + 0.45 * sin(elapsed_time * speed * 2.0);
-    float3 frame = float3(0.050, 0.850, 1.000) * (0.75 + 0.45 * pulse);
-    float3 out_rgb = lerp(color.rgb, frame, saturate(border * intensity));
-    float alpha = color.a * mask;
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    [branch]
+    if (aspect < 0.001)
+    {
+        aspect = 1.0;
+    }
+
+    float2 p = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    // fmod keeps the phase stable on a long stream. 0.83 / tau stays near 0.13 Hz.
+    float phase = fmod(elapsed_time * max(speed, 0.0), 6.283185);
+    float breath = sin(phase) * 0.015 * saturate(speed);
+    float radius = max(0.385 * amount + breath, 0.0);
+    float dist = hexagonDistance(p, radius);
+    float aa = max(length(uv_pixel_interval * float2(aspect, 1.0)), 0.001);
+    float mask = 1.0 - smoothstep(-aa, aa, dist);
+    float cover = lerp(1.0, mask, saturate(intensity));
+
+    float3 rgb = color.rgb;
+    float alpha = color.a * cover * saturate(opacity);
     [branch]
     if (!preserve_alpha)
     {
-        out_rgb = lerp(float3(0.02, 0.025, 0.03), out_rgb, mask);
-        alpha = 1.0;
+        rgb = lerp(float3(0.02, 0.025, 0.03), color.rgb, cover);
+        alpha = saturate(opacity);
     }
-    return float4(saturate(out_rgb), alpha * saturate(opacity));
+    return float4(rgb, alpha);
 }
 
 technique Draw
