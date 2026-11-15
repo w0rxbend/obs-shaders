@@ -1,27 +1,71 @@
 // Filename: shader_079_torn_paper_mask.effect
 // Category: Streamer branding pack
 // Effect: Torn paper mask
-// Visual principle: alpha-safe geometric masking, decorative frames, and procedural edge treatment.
-// What makes it cool: it turns a plain source into a branded layout element.
+// Visual principle: a near-full-frame sheet with irregular torn edges and a cream fiber rim.
+// What makes it cool: the webcam reads as ripped paper while the talking head stays in the window.
 // Suggested source type: webcam camera source, streamer layouts, browser source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> animated border
 // Performance cost: low
 // Alpha safe: yes
-// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// Limitations: single-pass procedural tear; no scanned paper texture.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.17;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,49 +94,62 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
+float valueNoise(float2 p)
 {
-    return dot(c, float3(0.299, 0.587, 0.114));
+    float2 cell = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash12(cell);
+    float b = hash12(cell + float2(1.0, 0.0));
+    float c = hash12(cell + float2(0.0, 1.0));
+    float d = hash12(cell + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
-float2 rotate2d(float2 p, float a)
+float roundedDistance(float2 p, float2 half_extent, float radius)
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
-float alphaOut(float sampled_alpha)
-{
-    float a = sampled_alpha;
-    [branch]
-    if (!preserve_alpha)
-    {
-        a = 1.0;
-    }
-    return a * saturate(opacity);
+    float2 q = abs(p) - half_extent + radius;
+    return length(max(q, float2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 p = uv - float2(center_x, center_y);
-    float jag = hash12(floor(uv * 48.0) + floor(elapsed_time * speed)) - 0.5;
-    float d = length(p * float2(1.08, 0.92)) - 0.47 + jag * 0.035;
-    float mask = 1.0 - smoothstep(0.0, 0.018 * amount, d);
-    float border = 1.0 - smoothstep(0.018, 0.055, abs(d));
-    float pulse = 0.55 + 0.45 * sin(elapsed_time * speed * 2.0);
-    float3 frame = float3(1.000, 0.250, 0.750) * (0.75 + 0.45 * pulse);
-    float3 out_rgb = lerp(color.rgb, frame, saturate(border * intensity));
-    float alpha = color.a * mask;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 p = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    // 0.12 rad/s at speed 1 is about 0.019 Hz. fmod keeps that orbit continuous on a long stream.
+    float phase = fmod(elapsed_time * max(speed, 0.0) * 0.12, 6.283185);
+    float2 drift = float2(sin(phase), cos(phase));
+
+    float coarse = valueNoise(p * 2.6 + drift * 0.55);
+    float mid = valueNoise(p * 6.4 + float2(drift.y, -drift.x) * 0.35 + 2.0);
+    float fine = valueNoise(p * 15.0 + float2(-drift.y, drift.x) * 0.2 + 5.0);
+    float jag = (coarse - 0.5) * 1.05 + (mid - 0.5) * 0.40 + (fine - 0.5) * 0.14;
+    float tear = jag * min(0.04 + 0.05 * max(amount, 0.0), 0.12);
+
+    float2 half_extent = float2(max(aspect * 0.5 - 0.04, 0.08), 0.46);
+    float dist = roundedDistance(p, half_extent, 0.008) + tear;
+
+    float aa = max(length(float2(uv_pixel_interval.x * aspect, uv_pixel_interval.y)), 0.001);
+    float mask = 1.0 - smoothstep(-aa, aa, dist);
+
+    float rim_reach = 0.008 + 0.016 * saturate(intensity);
+    float rim = smoothstep(-rim_reach * 1.7, -rim_reach * 0.40, dist);
+    rim = rim * (1.0 - smoothstep(-aa, aa, dist)) * mask;
+    float3 paper = saturate(float3(0.97, 0.94, 0.86) * (0.90 + 0.10 * fine));
+    float deckle = saturate(rim * max(intensity, 0.0));
+    float3 rgb = lerp(source.rgb, paper, deckle);
+
+    float alpha = source.a * mask;
     [branch]
     if (!preserve_alpha)
     {
-        out_rgb = lerp(float3(0.02, 0.025, 0.03), out_rgb, mask);
+        rgb = lerp(float3(0.05, 0.045, 0.04), rgb, mask);
         alpha = 1.0;
     }
-    return float4(saturate(out_rgb), alpha * saturate(opacity));
+    return float4(rgb, alpha * saturate(opacity));
 }
 
 technique Draw
