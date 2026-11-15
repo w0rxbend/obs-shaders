@@ -5,23 +5,65 @@
 // What makes it cool: it creates readable digital failure while keeping the source recognizable.
 // Suggested source type: screen capture, game capture, music visuals, alerts
 // Suggested shader-chain combinations: this shader -> RGB split -> digital noise
-// Performance cost: medium
-// Alpha safe: no
+// Performance cost: low
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
-uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.93;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +81,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,48 +92,56 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float row = floor(uv.y * (24.0 + amount * 28.0));
-    float gate = step(0.68, hash12(float2(row, floor(t * 8.0))));
-    float shift = (hash12(float2(row * 3.1, floor(t * 6.0))) - 0.5) * 0.075 * amount * gate;
-    float block = floor(uv.x * 18.0) + floor(uv.y * 10.0) * 31.0;
-    float block_gate = step(0.78, hash12(float2(block, floor(t * 4.0))));
-    float2 duv = float2(shift + block_gate * 0.025 * sin(t + block), 0.0);
-    float spread = 0.006 * intensity + abs(shift) * 0.25;
-    float rch = image.Sample(textureSampler, clamp(uv + duv + float2(spread, 0.0), 0.0, 1.0)).r;
-    float gch = image.Sample(textureSampler, clamp(uv + duv, 0.0, 1.0)).g;
-    float bch = image.Sample(textureSampler, clamp(uv + duv - float2(spread, 0.0), 0.0, 1.0)).b;
-    float3 accent = float3(0.000, 0.900, 1.000);
-    float3 out_rgb = lerp(float3(rch, gch, bch), accent, gate * 0.12 * intensity);
-    out_rgb += (hash12(floor(uv * uv_size / 2.0) + floor(t * 22.0)) - 0.5) * 0.07 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    // Wrap so a long stream does not lose the glitch phase.
+    float clock = fmod(elapsed_time * speed, 1024.0);
+    float tick = floor(clock * 2.0);
+    float breathe = 0.65 + 0.35 * sin(clock * 1.7);
+
+    float split = 0.010 * intensity * breathe;
+    float bias_x = (center_x - 0.5) * 0.02 * amount;
+    float bias_y = (center_y - 0.5) * 0.016 * amount;
+
+    float row = floor(uv.y * 28.0);
+    float row_hash = hash12(float2(row, tick));
+    float row_gate = step(0.74, row_hash);
+    float tear = (row_hash - 0.5) * 0.030 * amount * row_gate;
+
+    float block_id = floor(uv.x * 16.0) + floor(uv.y * 9.0) * 17.0;
+    float block_hash = hash12(float2(block_id, tick + 3.0));
+    float block_gate = step(0.88, block_hash);
+    float block_shift = (block_hash - 0.5) * 0.018 * amount * block_gate;
+
+    float2 base = uv + float2(block_shift + bias_x, 0.0);
+    float2 red_uv = clamp(base + float2(split + tear, bias_y), 0.0, 1.0);
+    float2 green_uv = clamp(base + float2(tear * 0.15, 0.0), 0.0, 1.0);
+    float2 blue_uv = clamp(base + float2(-split - tear * 0.65, -bias_y), 0.0, 1.0);
+
+    float3 split_rgb = float3(
+        image.Sample(textureSampler, red_uv).r,
+        image.Sample(textureSampler, green_uv).g,
+        image.Sample(textureSampler, blue_uv).b);
+    split_rgb = saturate(split_rgb);
+    float3 stepped = floor(split_rgb * 10.0 + 0.5) * 0.1;
+    split_rgb = lerp(split_rgb, stepped, row_gate * 0.20 * saturate(intensity));
+
+    float3 shown = lerp(source.rgb, split_rgb, saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
