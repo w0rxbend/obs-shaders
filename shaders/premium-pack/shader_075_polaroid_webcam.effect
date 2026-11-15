@@ -1,27 +1,71 @@
 // Filename: shader_075_polaroid_webcam.effect
 // Category: Streamer branding pack
 // Effect: Polaroid webcam
-// Visual principle: alpha-safe geometric masking, decorative frames, and procedural edge treatment.
-// What makes it cool: it turns a plain source into a branded layout element.
+// Visual principle: instant-film card with a thick bottom margin, warm photo grade, and a thin inner shadow.
+// What makes it cool: a webcam reads as a held Polaroid while the talking head stays in the photo window.
 // Suggested source type: webcam camera source, streamer layouts, browser source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> animated border
 // Performance cost: low
 // Alpha safe: yes
-// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// Limitations: single-pass card; no external paper texture; the caption strip is blank.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.85;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,49 +94,58 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
-float alphaOut(float sampled_alpha)
-{
-    float a = sampled_alpha;
-    [branch]
-    if (!preserve_alpha)
-    {
-        a = 1.0;
-    }
-    return a * saturate(opacity);
-}
-
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 p = uv - float2(center_x, center_y);
-    float jag = hash12(floor(uv * 48.0) + floor(elapsed_time * speed)) - 0.5;
-    float d = length(p) - 0.46;
-    float mask = 1.0 - smoothstep(0.0, 0.018 * amount, d);
-    float border = 1.0 - smoothstep(0.018, 0.055, abs(d));
-    float pulse = 0.55 + 0.45 * sin(elapsed_time * speed * 2.0);
-    float3 frame = float3(0.050, 0.850, 1.000) * (0.75 + 0.45 * pulse);
-    float3 out_rgb = lerp(color.rgb, frame, saturate(border * intensity));
-    float alpha = color.a * mask;
+    float4 source = image.Sample(textureSampler, clamp(uv, 0.0, 1.0));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float border_amount = max(amount, 0.0);
+    float top = 0.034 + 0.018 * border_amount;
+    float bottom = min(top + 0.07 + 0.05 * border_amount, 0.38);
+    // Side margin matches the top in pixels, not in UV.
+    float side_x = min(top / max(aspect, 0.001), 0.30);
+    float inner_w = max(1.0 - 2.0 * side_x, 0.001);
+    float inner_h = max(1.0 - top - bottom, 0.001);
+    float2 window_uv = float2((uv.x - side_x) / inner_w, (uv.y - top) / inner_h);
+    float2 photo_uv = clamp(float2(center_x, center_y) + (window_uv - 0.5) * 0.92, 0.0, 1.0);
+    float4 photo = image.Sample(textureSampler, photo_uv);
+
+    float grade = saturate(intensity);
+    float luma = dot(photo.rgb, float3(0.299, 0.587, 0.114));
+    float3 film = lerp(float3(luma, luma, luma), photo.rgb, lerp(1.0, 0.86, grade));
+    film = (film - 0.5) * (1.0 + 0.12 * grade) + 0.5;
+    film = film * lerp(float3(1.0, 1.0, 1.0), float3(1.07, 1.02, 0.91), grade) + 0.02 * grade;
+
+    float2 from_window = (window_uv - 0.5) * float2(1.15, 1.40);
+    float corner = smoothstep(0.40, 0.82, length(from_window));
+    film = lerp(film, film * 0.88, corner * grade);
+
+    float tick = floor(fmod(elapsed_time * max(speed, 0.0) * 1.5, 512.0));
+    float grain = hash12(floor(uv * 140.0) + tick) - 0.5;
+    film = saturate(film + grain * 0.035 * grade);
+
+    float feather = max(max(uv_pixel_interval.x, uv_pixel_interval.y), 0.001);
+    float edge = min(min(uv.x - side_x, (1.0 - side_x) - uv.x), min(uv.y - top, (1.0 - bottom) - uv.y));
+    float inside = smoothstep(0.0, feather, edge);
+    float shade = inside * (1.0 - smoothstep(0.0, 0.02, max(edge, 0.0)));
+    film = lerp(film, film * 0.78, shade * grade);
+
+    float3 paper = float3(0.96, 0.94, 0.90);
+    float groove = (1.0 - inside) * (1.0 - smoothstep(0.0, 0.012, max(-edge, 0.0)));
+    paper = lerp(paper, paper * 0.82, groove);
+
+    float3 framed = lerp(paper, film, inside);
+    float reveal = saturate(opacity) * grade;
+    float3 shown = lerp(source.rgb, framed, reveal);
+
+    float alpha = source.a;
     [branch]
     if (!preserve_alpha)
     {
-        out_rgb = lerp(float3(0.02, 0.025, 0.03), out_rgb, mask);
         alpha = 1.0;
     }
-    return float4(saturate(out_rgb), alpha * saturate(opacity));
+    return float4(shown, alpha);
 }
 
 technique Draw
