@@ -2,7 +2,13 @@
 // Box blur / Gaussian approximation using uv_pixel_interval.
 // Uses one fixed 9-tap kernel for OBS real-time safety.
 
-uniform float blur_size = 4.0; // 0.0 – 20.0
+uniform float blur_size <
+    string label = "Blur Size";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 20.0;
+    float step = 0.1;
+> = 4.0;
 uniform int   passes    = 2;   // 1 – 4  (scales the single-pass radius)
 
 uniform float2    uv_pixel_interval;
