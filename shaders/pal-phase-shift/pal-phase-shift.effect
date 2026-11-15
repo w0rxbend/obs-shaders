@@ -6,8 +6,26 @@
 // Chain order: apply before noise/grain shaders, after color grading
 
 uniform float4x4 ViewProj;
-uniform float phase_strength = 0.4;  // 0.0 – 1.0
-uniform float line_jitter    = 0.001; // 0.0 – 0.005
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+// 0.0 – 1.0 blend toward inverted V on odd lines
+uniform float phase_strength <
+    string label = "Phase Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+// 0.0 – 0.005 horizontal line timing drift
+uniform float line_jitter <
+    string label = "Line Jitter";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.005;
+    float step = 0.0001;
+> = 0.001;
 
 uniform texture2d image;
 uniform float2 uv_pixel_interval;
@@ -28,7 +46,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -59,13 +77,13 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
 
-    // Determine line number (0-based) in screen space
-    float lineF = uv.y / uv_pixel_interval.y;
+    // Line id from pixel height. Clamp the step so a zero interval cannot explode the count.
+    float lineF = uv.y / max(uv_pixel_interval.y, 0.001);
     float lineId = floor(lineF);
 
     // Per-line sub-pixel jitter on UV.x to simulate PAL line timing drift
     float jit = (Hash11(lineId * 31.7) - 0.5) * 2.0 * line_jitter;
-    float2 sampUv = float2(saturate(uv.x + jit), uv.y);
+    float2 sampUv = saturate(float2(uv.x + jit, uv.y));
 
     float4 col = image.Sample(textureSampler, sampUv);
     float3 yuv = RGBtoYUV(col.rgb);
@@ -74,8 +92,8 @@ float4 mainImage(VertData v_in) : TARGET
     float isOdd = fmod(lineId, 2.0);  // 0 on even, 1 on odd
     float phaseSign = 1.0 - 2.0 * isOdd; // +1 even, -1 odd
 
-    // Invert U component on odd rows to simulate PAL phase reversal
-    float3 yuvShifted = float3(yuv.x, yuv.y * phaseSign, yuv.z);
+    // Invert V (R-Y) on odd rows. U stays put; that is the PAL phase reversal.
+    float3 yuvShifted = float3(yuv.x, yuv.y, yuv.z * phaseSign);
 
     // Lerp between original and phase-shifted by strength
     float3 yuvFinal = lerp(yuv, yuvShifted, phase_strength);
