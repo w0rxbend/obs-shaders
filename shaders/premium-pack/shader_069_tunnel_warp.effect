@@ -13,15 +13,58 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.17;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +82,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -76,17 +100,44 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 center = float2(center_x, center_y);
     float2 p = uv - center;
-    float t = elapsed_time * speed;
+    p.x *= aspect;
+
+    // Far-corner reach keeps the tube circular when the center slider moves off mid-frame.
+    float2 corner_a = float2((0.0 - center.x) * aspect, 0.0 - center.y);
+    float2 corner_b = float2((1.0 - center.x) * aspect, 0.0 - center.y);
+    float2 corner_c = float2((0.0 - center.x) * aspect, 1.0 - center.y);
+    float2 corner_d = float2((1.0 - center.x) * aspect, 1.0 - center.y);
+    float reach = max(length(corner_a), max(length(corner_b), max(length(corner_c), length(corner_d))));
+    reach = max(reach, 0.001);
+
     float radius = length(p);
-    float wave = sin(radius * 27.0 - t * 3.0) * 0.025 * amount * intensity;
-    float bend = dot(p, p) * (0.22 + 4.0 * 0.025) * amount;
-    float2 dir = normalize(p + float2(0.0001, 0.0002));
-    float2 uv = center + p / (1.04 + abs(wave) + bend * 0.2) + dir * wave + p * bend;
-    float4 warped = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float r_n = saturate(radius / reach);
+    float2 dir = p / max(radius, 0.001);
+
+    // Bound the phase so a long stream does not collapse the sine.
+    float phase = fmod(elapsed_time * speed, 6.283185307);
+    float depth = amount * intensity * (0.85 + 0.15 * sin(phase));
+
+    // Cubic rim term bends the border into the tunnel. Compensate so a face near center stays near 1:1.
+    float curved = r_n * (1.0 + depth * 0.32 * r_n * r_n);
+    float compensate = 1.0 / max(1.0 + depth * 0.08, 0.001);
+    float ring = sin(r_n * 12.0 - phase * 2.0) * depth * 0.01 * r_n;
+    float sampled_n = (curved + ring) * compensate;
+
+    float edge = saturate((r_n - 0.28) / max(0.72, 0.001));
+    float twist = sin(phase) * depth * 0.22 * edge * edge;
+    float twist_s = sin(twist);
+    float twist_c = cos(twist);
+    dir = float2(dir.x * twist_c - dir.y * twist_s, dir.x * twist_s + dir.y * twist_c);
+
+    float2 warped_p = dir * sampled_n * reach;
+    warped_p.x /= max(aspect, 0.001);
+    float2 warped_uv = center + warped_p;
+    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
+    return float4(warped.rgb, alphaOut(warped.a));
 }
 
 technique Draw
