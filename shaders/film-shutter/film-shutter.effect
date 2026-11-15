@@ -7,9 +7,27 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float progress  = 0.5;  // 0.0 = fully hidden (bars closed), 1.0 = fully revealed
-uniform int   bar_count = 8;    // 2–20 number of horizontal shutter bars
-uniform float softness  = 0.01; // 0.0–0.05 bar-edge feather
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+// 0 = bars closed, 1 = fully revealed. Default stays half open.
+uniform float progress <
+    string label = "Progress";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform int bar_count = 8; // 2–20 number of horizontal shutter bars
+
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.01;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,32 +44,23 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv     = v_in.uv;
-    float4 color  = image.Sample(textureSampler, uv);
+    float2 uv = v_in.uv;
+    float4 color = image.Sample(textureSampler, uv);
 
-    float  n      = max((float)bar_count, 1.0);
-    // Which bar are we in? 0..n-1
-    float  barIdx = floor(uv.y * n);
-    // Local position within bar: 0=bottom, 1=top
-    float  barPos = frac(uv.y * n);
+    float bar_n = max((float)bar_count, 1.0);
+    float bar_pos = frac(uv.y * bar_n);
+    float dist = abs(bar_pos - 0.5);
+    float half_open = saturate(progress) * 0.5;
+    float feather = max(softness, 0.001);
+    float visible = smoothstep(dist - feather, dist + feather, half_open);
 
-    // Each bar opens symmetrically from center (0.5 in barPos space)
-    float  center = 0.5;
-    float  dist   = abs(barPos - center);     // 0 at center, 0.5 at edges
-    // Half-open width of each bar: goes from 0 (closed) to 0.5 (fully open)
-    float  halfOpen = progress * 0.5;
-
-    // Pixel is visible when inside the open region
-    float  soft   = max(softness, 0.001);
-    float  alpha  = smoothstep(dist - soft, dist + soft, halfOpen);
-
-    color.a      *= alpha;
+    color.rgb *= visible;
     return color;
 }
 
