@@ -1,27 +1,70 @@
 // Filename: shader_026_horror_red_shadows.effect
 // Category: Cinematic camera pack
 // Effect: Horror red shadows
-// Visual principle: luminance-aware color remapping, contrast shaping, vignette, and animated grain.
-// What makes it cool: it gives ordinary footage a clear emotional direction in one pass.
+// Visual principle: dark tones shift toward crimson, highlights stay natural, and a slow red vignette breathes.
+// What makes it cool: shadows turn horror-red while a talking head stays recognizable.
 // Suggested source type: webcam, game capture, video source, cinematic scenes
 // Suggested shader-chain combinations: exposure controls -> this shader -> film grain
 // Performance cost: low
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.93;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,27 +82,13 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
 }
 
 float luma3(float3 c)
 {
     return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,28 +97,42 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
-    float gray = luma3(color.rgb);
-    float3 tint = float3(0.480, 0.620, 0.920);
-    float3 warm = float3(1.05, 0.88 + 2 * 0.03, 0.72);
-    float3 cool = float3(0.70, 0.88, 1.12);
-    float vignette = smoothstep(0.88, 0.18, length((uv - float2(center_x, center_y)) * float2(1.15, 1.0)));
-    float grain = hash12(floor(uv * max(uv_size, float2(1.0, 1.0)) * 0.55) + floor(elapsed_time * speed * 18.0)) - 0.5;
-    float3 graded = lerp(color.rgb, float3(gray, gray, gray), 0.12 + 0.18 * amount);
-    graded = (graded - 0.5) * (1.0 + 0.45 * intensity) + 0.5;
-    graded *= lerp(cool, warm, saturate(tint.r + 0.25));
-    graded = lerp(graded, tint * (0.25 + gray * 0.95), 0.20 * intensity);
-    graded *= 0.72 + vignette * 0.38;
-    graded += grain * 0.045 * intensity;
-    return float4(saturate(graded), alphaOut(color.a));
+    float weight = max(amount, 0.0);
+    float strength = max(intensity, 0.0);
+    float contrast = 1.0 + 0.16 * strength * weight;
+    float3 shaped = (color.rgb - 0.5) * contrast + 0.5;
+    float tone = luma3(max(shaped, float3(0.0, 0.0, 0.0)));
+    float shade = 1.0 - smoothstep(0.05, 0.58, tone);
+    shaped = lerp(shaped, float3(tone, tone, tone), shade * 0.40 * weight);
+
+    // Wrap before scaling so a long stream keeps a stable pulse.
+    float wrapped_time = fmod(elapsed_time, 1024.0);
+    float pulse = 0.86 + 0.14 * sin(wrapped_time * speed);
+    float push = shade * weight * (0.10 + 0.11 * strength) * pulse;
+    float3 graded = shaped;
+    graded.r = graded.r + push * (1.0 - saturate(graded.r));
+    graded.g = graded.g * (1.0 - push * 0.62);
+    graded.b = graded.b * (1.0 - push * 0.82);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float reach = max(length(float2(aspect * 0.5, 0.5)), 0.001);
+    float edge = smoothstep(0.50, 1.20, length(from_center) / reach);
+    float edge_mix = edge * saturate(0.34 * strength) * weight;
+    graded *= lerp(float3(1.0, 1.0, 1.0), float3(0.46, 0.10, 0.08), edge_mix);
+
+    graded = saturate(graded);
+    float3 out_rgb = lerp(color.rgb, graded, saturate(opacity));
+    return float4(out_rgb, alphaOut(color.a));
 }
 
 technique Draw
