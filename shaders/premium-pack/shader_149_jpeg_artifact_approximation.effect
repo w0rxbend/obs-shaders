@@ -1,8 +1,8 @@
 // Filename: shader_149_jpeg_artifact_approximation.effect
 // Category: Extreme / transition expansion
 // Effect: JPEG artifact approximation
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: macroblock chroma, coarse quantization, edge ringing, and slow mosquito noise.
+// What makes it cool: the picture looks JPEG-compressed while a talking head stays recognizable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,54 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
-uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.17;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.01;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +76,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,42 +87,75 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
+float luma3(float3 color)
 {
-    return dot(c, float3(0.299, 0.587, 0.114));
+    return dot(color, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
+float3 quantizeRgb(float3 color, float steps)
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float safe_steps = max(steps, 0.001);
+    return floor(color * safe_steps + 0.5) / safe_steps;
+}
+
+float3 lumaWithChroma(float luma, float3 chroma_rgb)
+{
+    float chroma_luma = luma3(chroma_rgb);
+    float cr = chroma_rgb.r - chroma_luma;
+    float cb = chroma_rgb.b - chroma_luma;
+    float green = luma - (0.299 * cr + 0.114 * cb) / max(0.587, 0.001);
+    return float3(luma + cr, green, luma + cb);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
-    if (!preserve_alpha)
+    if (preserve_alpha)
     {
-        a = 1.0;
+        return sampled_alpha;
     }
-    return a * saturate(opacity);
+    return saturate(sampled_alpha);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.87) + sin(t * 0.37 + 5.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 149.0), cos(t * 0.73 + 6.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float block_px = lerp(8.0, 16.0, saturate(amount * 0.5));
+    float2 pixel = max(abs(uv_pixel_interval), float2(0.001, 0.001));
+    float2 block_uv = max(pixel * block_px, float2(0.001, 0.001));
+    float2 origin = float2(center_x, center_y);
+    float2 block_id = floor((uv - origin) / block_uv);
+    float2 block_center = clamp(origin + (block_id + 0.5) * block_uv, 0.0, 1.0);
+    float3 block = image.Sample(textureSampler, block_center).rgb;
+
+    float sharp_y = luma3(source.rgb);
+    float block_y = luma3(block);
+    float luma_steps = max(8.0, 28.0 - intensity * 6.0);
+    float chroma_steps = max(5.0, 16.0 - intensity * 5.0);
+    float3 quantized_block = quantizeRgb(block, chroma_steps);
+    float sharp_q = quantizeRgb(float3(sharp_y, sharp_y, sharp_y), luma_steps).x;
+    float block_q = quantizeRgb(float3(block_y, block_y, block_y), luma_steps).x;
+    float y = lerp(sharp_q, block_q, saturate(amount * 0.22));
+
+    float2 away = uv - block_center;
+    float2 dir = away / max(length(away), 0.001);
+    float2 ring_uv = clamp(uv + dir * pixel * 2.5, 0.0, 1.0);
+    float ring_y = luma3(image.Sample(textureSampler, ring_uv).rgb);
+    float edge = saturate(abs(sharp_y - block_y) * 6.0);
+    float ring = (sharp_y - ring_y) * edge * 0.22 * saturate(intensity * 0.5);
+    // Default speed retargets edge speckle under 1 Hz, not a full-frame flash.
+    float tick = floor(elapsed_time * speed * 0.6);
+    float speckle = hash12(block_id + float2(tick, 5.0)) - 0.5;
+    float mosquito = speckle * edge * 0.045 * saturate(intensity);
+    y += ring + mosquito;
+
+    float chroma_mix = saturate(0.65 + amount * 0.15);
+    float3 chroma_rgb = lerp(source.rgb, quantized_block, chroma_mix);
+    float3 jpeg = saturate(lumaWithChroma(y, chroma_rgb));
+    float3 shown = lerp(source.rgb, jpeg, saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
