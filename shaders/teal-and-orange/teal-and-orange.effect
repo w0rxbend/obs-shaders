@@ -6,9 +6,32 @@
 // Chain order: early in chain, before grain or bloom
 
 uniform float4x4 ViewProj;
-uniform float strength   = 0.6; // 0.0 – 1.0
-uniform float teal_depth = 0.5; // 0.0 – 1.0
-uniform float orange_lift = 0.5; // 0.0 – 1.0
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.6;
+
+uniform float teal_depth <
+    string label = "Teal Depth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float orange_lift <
+    string label = "Orange Lift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
 
 uniform texture2d image;
 
@@ -28,7 +51,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
