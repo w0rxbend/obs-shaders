@@ -1,8 +1,8 @@
 // Filename: shader_103_prism_trail_split.effect
 // Category: VJ / music video expansion
 // Effect: Prism trail split
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: RGB samples peel apart along a slow prism axis, with short ghosts trailing behind the split.
+// What makes it cool: a talking-head stays readable while color fringes and short trails make the frame feel like light through glass.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.09;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +82,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -68,24 +92,46 @@ float alphaOut(float sampled_alpha)
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = sampled_alpha * saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
+}
+
+float2 shiftedUv(float2 uv, float2 axis, float along, float2 steer)
+{
+    return clamp(uv + axis * along + steer, 0.0, 1.0);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 1.21) + sin(t * 0.37 + 4.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 103.0), cos(t * 0.73 + 4.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float phase = fmod(elapsed_time * max(speed, 0.0), 1024.0);
+    float angle = phase * 0.22;
+    float pulse = 0.82 + 0.18 * sin(phase * 0.55);
+    // UV x covers a wider pixel span than y on non-square frames.
+    float2 axis = float2(cos(angle) / max(aspect, 0.001), sin(angle));
+    float2 pivot = float2(center_x, center_y);
+    float2 from_pivot = (uv - pivot) * float2(aspect, 1.0);
+    float radial = saturate(length(from_pivot));
+    float spread = 0.0045 * max(intensity, 0.0) * max(amount, 0.0) * pulse * (0.70 + 0.45 * radial);
+    float2 steer = (pivot - float2(0.5, 0.5)) * 0.012 * max(amount, 0.0);
+
+    float3 prism = float3(
+        image.Sample(textureSampler, shiftedUv(uv, axis, spread * 2.0, steer)).r,
+        image.Sample(textureSampler, shiftedUv(uv, axis, spread * 0.15, steer)).g,
+        image.Sample(textureSampler, shiftedUv(uv, axis, spread * -1.5, steer)).b);
+    float3 ghost = float3(
+        image.Sample(textureSampler, shiftedUv(uv, axis, spread * -3.0, steer)).r,
+        image.Sample(textureSampler, shiftedUv(uv, axis, spread * -5.0, steer)).g,
+        image.Sample(textureSampler, shiftedUv(uv, axis, spread * -7.2, steer)).b);
+
+    float trail = 0.28 * saturate(intensity);
+    float3 styled = saturate(lerp(prism, ghost, trail));
+    float3 shown = lerp(source.rgb, styled, saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
