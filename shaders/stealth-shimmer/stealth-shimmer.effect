@@ -1,16 +1,39 @@
 // Performance: low
 // Webcam safe: yes
 // Preserves alpha: yes
-// Use case: Animated UV warp with alpha reduction for invisible/cloaked appearance
-// Chain order: last — alpha reduction should be the final step
+// Use case: Refractive UV shimmer with an iridescent cloak; visibility mixes toward the ghost
+// Chain order: anywhere — sampled alpha is kept
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
 uniform float elapsed_time;
-uniform float shimmer_strength = 0.015; // 0.0–0.03
-uniform float shimmer_speed    = 2.0;   // 0.5–5.0
-uniform float visibility       = 0.35;  // 0.0–1.0
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float shimmer_strength <
+    string label = "Shimmer Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.03;
+    float step = 0.001;
+> = 0.015;
+
+uniform float shimmer_speed <
+    string label = "Shimmer Speed";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0;
+
+uniform float visibility <
+    string label = "Visibility";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.35;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -27,35 +50,37 @@ VertData VSDefault(VertData v_in)
 {
     VertData v_out;
     v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    v_out.uv  = v_in.uv;
+    v_out.uv  = v_in.uv * uv_scale + uv_offset;
     return v_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float  t  = elapsed_time * shimmer_speed;
+    float t = elapsed_time * shimmer_speed;
 
-    // Multi-frequency UV warp — creates the cloaking refraction look
-    float warp_x  = sin(uv.y * 20.0 + t * 1.3) * shimmer_strength;
-    float warp_y  = sin(uv.x * 17.0 - t * 1.0) * shimmer_strength;
-    float warp_x2 = sin(uv.y * 9.0  - t * 0.7 + uv.x * 8.0) * shimmer_strength * 0.5;
+    float warp_x = sin(uv.y * 20.0 + t * 1.3) * shimmer_strength;
+    float warp_y = sin(uv.x * 17.0 - t * 1.0) * shimmer_strength;
+    float warp_x2 = sin(uv.y * 9.0 - t * 0.7 + uv.x * 8.0) * shimmer_strength * 0.5;
     float warp_y2 = cos(uv.x * 12.0 + t * 0.9 - uv.y * 6.0) * shimmer_strength * 0.5;
 
     float2 warped_uv = clamp(uv + float2(warp_x + warp_x2, warp_y + warp_y2), 0.0, 1.0);
     float4 col = image.Sample(textureSampler, warped_uv);
 
-    // Iridescent shimmer highlight — slight color shift on bright edges
     float shimmer_val = sin(uv.x * 30.0 + t * 2.1) * sin(uv.y * 25.0 - t * 1.7);
-    shimmer_val = shimmer_val * 0.5 + 0.5; // 0..1
+    shimmer_val = shimmer_val * 0.5 + 0.5;
     float3 iridescent = lerp(float3(0.5, 0.8, 1.0), float3(0.8, 1.0, 0.6), shimmer_val);
-    float  edge_bright = shimmer_val * 0.15;
-    float3 result = col.rgb + iridescent * edge_bright;
+    float edge_bright = shimmer_val * 0.15;
+    float3 shimmered = clamp(col.rgb + iridescent * edge_bright, 0.0, 1.0);
 
-    // Reduce alpha for the cloaked semi-invisible look
-    float out_alpha = col.a * visibility;
+    // Cloak in color only. Alpha stays sampled so the layer does not punch a hole.
+    float luma = dot(shimmered, float3(0.299, 0.587, 0.114));
+    float ghost_tint = 0.4;
+    float3 ghost = lerp(float3(luma, luma, luma), iridescent, ghost_tint);
+    float presence = clamp(visibility, 0.0, 1.0);
+    float3 shown = lerp(ghost, shimmered, presence);
 
-    return float4(clamp(result, 0.0, 1.0), out_alpha);
+    return float4(clamp(shown, 0.0, 1.0), col.a);
 }
 
 technique Draw
