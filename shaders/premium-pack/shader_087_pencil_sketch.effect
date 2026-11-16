@@ -1,8 +1,8 @@
 // Filename: shader_087_pencil_sketch.effect
 // Category: Experimental art pack
 // Effect: Pencil sketch
-// Visual principle: stylized color quantization, edge emphasis, pattern overlays, and painterly sampling.
-// What makes it cool: it makes live footage look intentionally illustrated instead of merely filtered.
+// Visual principle: graphite tone, contour lines, and directional pencil hatching on warm paper.
+// What makes it cool: a live face stays readable as a graphite drawing, not a color filter.
 // Suggested source type: webcam, image source, video source, VJ visuals
 // Suggested shader-chain combinations: this shader -> posterize or halftone -> light vignette
 // Performance cost: medium
@@ -11,17 +11,61 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.01;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.19;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -73,23 +117,62 @@ float alphaOut(float sampled_alpha)
     return a * saturate(opacity);
 }
 
+float sampleLuma(float2 uv)
+{
+    return luma3(image.Sample(textureSampler, uv).rgb);
+}
+
+float sobelEdge(float2 uv, float2 px)
+{
+    float tl = sampleLuma(uv + float2(-px.x, -px.y));
+    float tc = sampleLuma(uv + float2(0.0, -px.y));
+    float tr = sampleLuma(uv + float2(px.x, -px.y));
+    float ml = sampleLuma(uv + float2(-px.x, 0.0));
+    float mr = sampleLuma(uv + float2(px.x, 0.0));
+    float bl = sampleLuma(uv + float2(-px.x, px.y));
+    float bc = sampleLuma(uv + float2(0.0, px.y));
+    float br = sampleLuma(uv + float2(px.x, px.y));
+    float gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+    float gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+    return sqrt(gx * gx + gy * gy);
+}
+
+float strokeMask(float coord, float shadow, float light_cut, float dark_cut)
+{
+    float cut = lerp(light_cut, dark_cut, shadow);
+    return step(cut, frac(coord));
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 px = uv_pixel_interval * (1.0 + amount * 2.0);
-    float4 c = color;
-    float4 cx = image.Sample(textureSampler, clamp(uv + float2(px.x, 0.0), 0.0, 1.0));
-    float4 cy = image.Sample(textureSampler, clamp(uv + float2(0.0, px.y), 0.0, 1.0));
-    float edge = length(c.rgb - cx.rgb) + length(c.rgb - cy.rgb);
-    float levels = 4.0 + floor(amount * 5.0);
-    float3 quant = floor(c.rgb * levels) / levels;
-    float dots = step(0.48, frac((uv.x + uv.y + sin(elapsed_time * speed) * 0.03) * uv_size.x / (10.0 + amount * 10.0)));
-    float gray = luma3(quant);
-    float3 ink = lerp(quant, float3(1.000, 0.700, 0.200) * (0.25 + gray), 0.22 * intensity);
-    ink = lerp(ink, float3(0.02, 0.02, 0.025), saturate(edge * 2.5 * intensity));
-    ink += dots * 0.035 * intensity;
-    return float4(saturate(ink), alphaOut(c.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+    float gray = luma3(source.rgb);
+    float edge = sobelEdge(uv, uv_pixel_interval);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 aspect_uv = float2((uv.x - center_x) * aspect, uv.y - center_y);
+    float angle = 0.55 + (center_x - 0.5) * 1.2;
+    // 0.35 * speed moves strokes under half a period per second at the default, not a frame flash.
+    float drift = elapsed_time * speed * 0.35;
+    float hatch_freq = 18.0 + amount * 16.0;
+    float2 stroked = rotate2d(aspect_uv, angle);
+    float2 crossed = rotate2d(aspect_uv, angle + 1.15);
+    float shadow = saturate((0.62 - gray) * 1.8);
+    float hatch = strokeMask(stroked.x * hatch_freq + drift, shadow, 0.86, 0.5);
+    float cross = step(0.55, shadow) * strokeMask(crossed.y * hatch_freq - drift * 0.5, shadow, 0.92, 0.62);
+    float3 paper = float3(0.95, 0.93, 0.88);
+    float3 lead = float3(0.16, 0.15, 0.14);
+    float tone = saturate((gray - 0.04) * 1.2);
+    float3 sketch = lerp(lead, paper, tone);
+    float edge_ink = saturate(edge * (0.7 + amount));
+    float hatch_weight = saturate(amount);
+    sketch = lerp(sketch, lead, edge_ink);
+    sketch = lerp(sketch, lead, hatch * shadow * hatch_weight * 0.75);
+    sketch = lerp(sketch, lead, cross * hatch_weight * 0.55);
+    float grain = hash12(floor(uv * float2(120.0, 120.0)));
+    sketch *= lerp(0.93, 1.0, grain);
+    float3 rgb = lerp(source.rgb, sketch, saturate(intensity));
+    return float4(saturate(rgb), alphaOut(source.a));
 }
 
 technique Draw
