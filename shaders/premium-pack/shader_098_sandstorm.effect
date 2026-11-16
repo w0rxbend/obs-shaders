@@ -1,8 +1,8 @@
 // Filename: shader_098_sandstorm.effect
 // Category: Weather / atmosphere pack
 // Effect: Sandstorm
-// Visual principle: procedural atmospheric layers, moving shadows, lens streaks, and brightness pulses.
-// What makes it cool: it adds environmental storytelling without external image textures.
+// Visual principle: horizontal gusts shear the frame, sand sheets and grains blow across, and a warm veil stays thinner over the subject.
+// What makes it cool: a live sandstorm crosses the shot while a talking head stays recognizable.
 // Suggested source type: webcam, game capture, video source, image source
 // Suggested shader-chain combinations: this shader -> cinematic grade -> lens dirt
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.09;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +82,32 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-float hash12(float2 p)
+float hash12(float2 point)
 {
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+    float3 p3 = frac(float3(point.x, point.y, point.x) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
+float sandGrain(float2 uv, float cells, float scroll_rate)
 {
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float clock = elapsed_time * speed;
+    float2 grid = float2(
+        uv.x * cells * aspect + clock * scroll_rate + (center_x - 0.5) * cells,
+        uv.y * cells + clock * scroll_rate * 0.07 + (center_y - 0.5) * cells);
+    float2 id = floor(grid);
+    float2 local = frac(grid) - 0.5;
+    float n = hash12(id);
+    float2 spot = float2(hash12(id + float2(2.3, 5.1)), hash12(id + float2(8.7, 1.4))) - 0.5;
+    float dist = length(local - spot * 0.45);
+    float body = 1.0 - smoothstep(0.02, 0.08, dist);
+    float keep = step(0.93, n);
+    return body * keep;
 }
 
 float alphaOut(float sampled_alpha)
@@ -76,18 +124,42 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float streak = pow(saturate(1.0 - abs(frac(uv.x * 28.0 + uv.y * 7.0 - t * 1.6) - 0.5) * 20.0), 2.0);
-    float flakes = step(0.985 - amount * 0.006, hash12(floor((uv + float2(0.0, t * 0.05)) * uv_size / 6.0)));
-    float shadow = 0.75 + 0.25 * sin(uv.x * 5.0 + uv.y * 3.0 + t * 0.7);
-    float2 warp = float2(streak * 0.006 * amount, flakes * 0.003) * intensity;
-    float4 src = image.Sample(textureSampler, clamp(uv + warp, 0.0, 1.0));
-    float3 atmosphere = float3(0.650, 0.550, 0.350);
-    float3 out_rgb = src.rgb * lerp(1.0, shadow, 0.20 * intensity);
-    out_rgb = lerp(out_rgb, atmosphere, 0.12 * amount);
-    out_rgb += (streak + flakes) * atmosphere * 0.35 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float clock = elapsed_time * speed;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float bank = 0.5 + 0.5 * sin(uv.x * 2.4 - clock * 0.65 + center_x * 6.28318);
+    float gust = 0.5 + 0.5 * sin(uv.y * 6.0 + clock * 1.15 + center_y * 6.28318);
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float half_span = length(float2(aspect * 0.5, 0.5));
+    float edge = saturate(length(from_center) / max(half_span, 0.001));
+    // Clearer over the storm center so a centered talking head stays readable.
+    float density = saturate(0.40 + 0.45 * bank * gust);
+    density = lerp(density * 0.58, density, edge);
+
+    float shear = (bank - 0.5) * 0.014 * max(intensity, 0.0);
+    float lift = (gust - 0.5) * 0.004 * max(intensity, 0.0);
+    float2 sample_uv = clamp(uv + float2(shear, lift), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 planted_uv = clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0));
+    float4 source = image.Sample(textureSampler, planted_uv);
+    float3 blown = image.Sample(textureSampler, sample_uv).rgb;
+    float3 rgb = lerp(source.rgb, blown, 0.65);
+
+    float shadow = lerp(0.84, 1.0, gust);
+    rgb *= lerp(1.0, shadow, saturate(0.35 * intensity));
+
+    float3 sand = float3(0.74, 0.54, 0.30);
+    float3 sand_bright = float3(0.92, 0.76, 0.46);
+    float veil = saturate(density * 0.42 * intensity * amount);
+    rgb = lerp(rgb, sand, veil);
+
+    float band = abs(frac(uv.y * 32.0 + gust * 0.12 - clock * 0.45) - 0.5);
+    float sheet = pow(saturate(1.0 - band * 26.0), 2.0);
+    float near_grains = sandGrain(uv, 16.0, 11.0);
+    float far_grains = sandGrain(uv, 38.0, 23.0);
+    float grit = saturate(sheet * 0.18 + near_grains * 0.40 + far_grains * 0.28);
+    float grit_mix = saturate(grit * intensity * amount);
+    rgb = lerp(rgb, sand_bright, grit_mix);
+    rgb = saturate(rgb);
+    return float4(rgb, alphaOut(source.a));
 }
 
 technique Draw
