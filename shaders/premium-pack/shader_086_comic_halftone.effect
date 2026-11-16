@@ -1,27 +1,70 @@
 // Filename: shader_086_comic_halftone.effect
 // Category: Experimental art pack
 // Effect: Comic halftone
-// Visual principle: stylized color quantization, edge emphasis, pattern overlays, and painterly sampling.
-// What makes it cool: it makes live footage look intentionally illustrated instead of merely filtered.
+// Visual principle: round ink dots sized by cell luminance, over a few flat comic colors.
+// What makes it cool: live footage reads as a printed comic while a talking head stays recognizable.
 // Suggested source type: webcam, image source, video source, VJ visuals
 // Suggested shader-chain combinations: this shader -> posterize or halftone -> light vignette
-// Performance cost: medium
+// Performance cost: low
 // Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.93;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +82,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -75,21 +99,36 @@ float alphaOut(float sampled_alpha)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 px = uv_pixel_interval * (1.0 + amount * 2.0);
-    float4 c = color;
-    float4 cx = image.Sample(textureSampler, clamp(uv + float2(px.x, 0.0), 0.0, 1.0));
-    float4 cy = image.Sample(textureSampler, clamp(uv + float2(0.0, px.y), 0.0, 1.0));
-    float edge = length(c.rgb - cx.rgb) + length(c.rgb - cy.rgb);
-    float levels = 4.0 + floor(amount * 5.0);
-    float3 quant = floor(c.rgb * levels) / levels;
-    float dots = step(0.48, frac((uv.x + uv.y + sin(elapsed_time * speed) * 0.03) * uv_size.x / (10.0 + amount * 10.0)));
-    float gray = luma3(quant);
-    float3 ink = lerp(quant, float3(0.850, 0.300, 1.000) * (0.25 + gray), 0.22 * intensity);
-    ink = lerp(ink, float3(0.02, 0.02, 0.025), saturate(edge * 2.5 * intensity));
-    ink += dots * 0.035 * intensity;
-    return float4(saturate(ink), alphaOut(c.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 pixel_size = max(uv_size, float2(1.0, 1.0));
+    float2 origin = float2(center_x, center_y);
+    float cell_px = max(20.0 - amount * 8.0, 2.0);
+    float cell = cell_px / max(pixel_size.y, 0.001);
+    // 0.4 rad scale: default speed 1.01 crawls the dots about once every 15 seconds.
+    float phase = elapsed_time * speed * 0.4;
+    float2 crawl = float2(sin(phase), cos(phase * 0.8)) * cell * 0.45;
+
+    float2 grid = ((uv - origin) * float2(aspect, 1.0) + crawl) / max(cell, 0.001);
+    float dist = length(frac(grid) - 0.5);
+    float2 cell_p = (floor(grid) + 0.5) * cell - crawl;
+    float2 cell_uv = cell_p / float2(max(aspect, 0.001), 1.0) + origin;
+    float4 cell_color = image.Sample(textureSampler, clamp(cell_uv, 0.0, 1.0));
+
+    float luma = dot(cell_color.rgb, float3(0.299, 0.587, 0.114));
+    float grade = saturate(intensity * 0.55);
+    float radius = 0.46 * saturate(1.0 - luma) * saturate(0.35 + 0.65 * grade);
+    float edge1 = max(radius, 0.001);
+    float edge0 = max(edge1 - (1.2 / max(cell_px, 0.001)), 0.0);
+    float ink = 1.0 - smoothstep(edge0, edge1, dist);
+
+    float levels = max(5.0, 0.001);
+    float3 flat = floor(source.rgb * levels + 0.5) / levels;
+    float3 dotted = lerp(flat, float3(0.05, 0.04, 0.06), ink);
+    float3 comic = lerp(source.rgb, dotted, grade);
+    return float4(saturate(comic), alphaOut(source.a));
 }
 
 technique Draw
