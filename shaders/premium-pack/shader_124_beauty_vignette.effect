@@ -1,8 +1,8 @@
 // Filename: shader_124_beauty_vignette.effect
 // Category: Portrait / beauty expansion
 // Effect: Beauty vignette
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: soft warm portrait grade with a slow circular vignette around a stable center.
+// What makes it cool: it frames a talking head like a beauty shot without covering the face.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,61 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.17;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.17;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +83,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -76,16 +101,39 @@ float alphaOut(float sampled_alpha)
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.70) + sin(t * 0.37 + 7.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 124.0), cos(t * 0.73 + 3.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 texel = uv_pixel_interval * (2.0 + amount * 1.6);
+    float2 uv_c = clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv_px = clamp(uv + float2(texel.x, 0.0), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv_nx = clamp(uv - float2(texel.x, 0.0), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv_py = clamp(uv + float2(0.0, texel.y), float2(0.0, 0.0), float2(1.0, 1.0));
+    float2 uv_ny = clamp(uv - float2(0.0, texel.y), float2(0.0, 0.0), float2(1.0, 1.0));
+    float4 center_sample = image.Sample(textureSampler, uv_c);
+    float4 s_px = image.Sample(textureSampler, uv_px);
+    float4 s_nx = image.Sample(textureSampler, uv_nx);
+    float4 s_py = image.Sample(textureSampler, uv_py);
+    float4 s_ny = image.Sample(textureSampler, uv_ny);
+
+    float3 soft = (center_sample.rgb + s_px.rgb + s_nx.rgb + s_py.rgb + s_ny.rgb) / max(5.0, 0.001);
+    float soften = saturate(amount * 0.28);
+    float3 rgb = lerp(center_sample.rgb, soft, soften);
+
+    float luma = dot(rgb, float3(0.299, 0.587, 0.114));
+    float mid = saturate(1.0 - abs(luma * 2.0 - 1.0));
+    rgb = lerp(rgb, rgb * float3(1.05, 0.90, 0.80), mid * saturate(amount * 0.35));
+    rgb = rgb + (1.0 - rgb) * (0.035 * saturate(amount));
+
+    // Pixel-round falloff. Inner radius stays open so a centered face is not covered.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 delta = uv - float2(center_x, center_y);
+    delta.x *= aspect;
+    float radius = length(delta);
+    float vig = smoothstep(0.20, 0.70, radius);
+    float phase = fmod(elapsed_time * speed, 6.283185307);
+    float breath = 0.90 + 0.10 * sin(phase * 0.35);
+    float shade = saturate(vig * breath * intensity * 0.50);
+    rgb = lerp(rgb, float3(0.09, 0.045, 0.025), shade);
+
+    return float4(saturate(rgb), alphaOut(center_sample.a));
 }
 
 technique Draw
