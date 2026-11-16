@@ -1,8 +1,8 @@
 // Filename: shader_106_bass_glow_throb.effect
 // Category: VJ / music video expansion
 // Effect: Bass glow throb
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: aspect-correct warm glow and a short highlight bloom on a slow bass throb.
+// What makes it cool: the frame swells like a sub hit while a talking head stays readable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.93;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.83;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,53 +82,63 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 1.04) + sin(t * 0.37 + 7.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 106.0), cos(t * 0.73 + 7.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = max(uv_size.x / max(uv_size.y, 1.0), 0.001);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float dist = length(from_center);
+
+    // speed is hits per second. Default 0.83 stays under a 3 Hz full-frame flash.
+    float cycle = frac(fmod(elapsed_time, 1024.0) * speed);
+    float wave = pow(0.5 + 0.5 * sin(cycle * 6.28318530718), 1.6);
+    float throb = 0.40 + 0.60 * wave;
+
+    float spread = saturate(amount * 0.5);
+    float body_span = lerp(0.018, 0.085, spread);
+    float body = exp(-(dist * dist) / max(body_span, 0.001));
+    float core = exp(-(dist * dist) / max(0.007, 0.001));
+
+    float reach = lerp(0.006, 0.030, spread);
+    float reach_x = reach / max(aspect, 0.001);
+    float3 bloom = float3(0.0, 0.0, 0.0);
+    [unroll]
+    for (int tap = 0; tap < 4; tap++)
+    {
+        float ang = 1.57079632679 * float(tap);
+        float2 off = float2(cos(ang) * reach_x, sin(ang) * reach);
+        float2 tap_uv = clamp(uv + off, 0.0, 1.0);
+        float3 tap_rgb = image.Sample(textureSampler, tap_uv).rgb;
+        float luma = dot(tap_rgb, float3(0.299, 0.587, 0.114));
+        bloom += tap_rgb * luma;
+    }
+    bloom *= 0.25;
+
+    float3 glow = float3(1.0, 0.36, 0.08) * body * 0.20;
+    glow += float3(1.0, 0.62, 0.28) * core * 0.08;
+    glow += bloom * float3(1.0, 0.48, 0.20) * 0.14;
+    glow *= intensity * throb;
+
+    float3 lit = saturate(source.rgb + glow);
+    float3 shown = lerp(source.rgb, lit, saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
