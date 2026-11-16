@@ -3,8 +3,20 @@
 // separation    : horizontal UV offset (0.0–0.05, default 0.008)
 // vertical_shift: vertical UV offset   (0.0–0.02,  default 0.0)
 
-uniform float separation     = 0.008;
-uniform float vertical_shift = 0.0;
+uniform float separation <
+    string label = "Separation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.008;
+uniform float vertical_shift <
+    string label = "Vertical Shift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.02;
+    float step = 0.001;
+> = 0.0;
 
 uniform texture2d image;
 
@@ -30,13 +42,8 @@ float4 mainImage(VertData v_in) : TARGET
 
     float4 colLeft  = image.Sample(textureSampler, uvLeft);
     float4 colRight = image.Sample(textureSampler, uvRight);
+    float source_alpha = image.Sample(textureSampler, uv).a;
 
-    // Anaglyph: red from left eye, green+blue from right eye
-    float4 result;
-    result.r = colLeft.r;
-    result.g = colRight.g;
-    result.b = colRight.b;
-    result.a = max(colLeft.a, colRight.a);
-
-    return result;
+    float3 rgb = saturate(float3(colLeft.r, colRight.g, colRight.b));
+    return float4(rgb, source_alpha);
 }
