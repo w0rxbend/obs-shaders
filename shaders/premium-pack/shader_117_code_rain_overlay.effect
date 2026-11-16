@@ -1,8 +1,8 @@
 // Filename: shader_117_code_rain_overlay.effect
 // Category: Screen capture utility expansion
 // Effect: Code rain overlay
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: falling code columns overlay the source and stay thinner over the subject.
+// What makes it cool: matrix glyphs read clearly while a talking head stays recognizable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.01;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,42 +93,58 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
+}
+
+float2 codeRain(float2 uv, float columns, float fall_rate)
+{
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float clock = fmod(max(elapsed_time, 0.0), 4096.0) * speed;
+    float x_grid = uv.x * aspect * columns + (center_x - 0.5) * 6.0;
+    float y_grid = uv.y * columns;
+    float col = floor(x_grid);
+    float col_h = hash12(float2(col, fall_rate * 11.0));
+    float head = frac(col_h * 5.0 + clock * fall_rate * (0.40 + col_h * 0.80) + (center_y - 0.5));
+    float behind = frac(head - uv.y);
+    float trail = saturate(1.0 - behind * (2.6 + col_h * 2.0));
+    float2 cell_uv = frac(float2(x_grid, y_grid));
+    float glyph_h = hash12(float2(col, floor(y_grid)) + float2(floor(clock * 0.80), col_h * 13.0));
+    float inside = step(0.14, cell_uv.x) * step(cell_uv.x, 0.86);
+    inside *= step(0.08, cell_uv.y) * step(cell_uv.y, 0.92);
+    float bits = step(0.46, frac(cell_uv.x * 3.0 + glyph_h * 2.0));
+    bits *= step(0.40, frac(cell_uv.y * 5.0 + glyph_h));
+    float keep = step(saturate(0.78 - 0.22 * amount), glyph_h);
+    float glyph = inside * bits * keep;
+    float body = glyph * trail;
+    float tip = glyph * (1.0 - smoothstep(0.0, 0.09, behind));
+    return float2(body, tip);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
     float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.87) + sin(t * 0.37 + 0.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 117.0), cos(t * 0.73 + 7.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    // Thin the rain on the subject so a talking head stays readable.
+    float edge_w = smoothstep(0.10, 0.70, length(from_center));
+    float2 near_rain = codeRain(uv, 22.0, 0.90);
+    float2 far_rain = codeRain(uv, 38.0, 1.40);
+    float body = saturate(near_rain.x + far_rain.x * 0.60);
+    float tip = saturate(near_rain.y + far_rain.y * 0.60);
+    float gain = intensity * opacity * lerp(0.42, 1.0, edge_w);
+    float3 rain_rgb = float3(0.05, 0.78, 0.24);
+    float3 out_rgb = lerp(color.rgb, rain_rgb, saturate(body * 0.70 * gain));
+    out_rgb = lerp(out_rgb, float3(0.80, 1.0, 0.88), saturate(tip * gain));
+    return float4(saturate(out_rgb), alphaOut(color.a));
 }
 
 technique Draw
