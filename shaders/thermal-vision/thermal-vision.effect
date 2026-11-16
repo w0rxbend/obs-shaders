@@ -1,6 +1,6 @@
 // Performance: low
 // Webcam safe: yes
-// Preserves alpha: no
+// Preserves alpha: yes
 // Use case: Thermal camera approximation — maps luminance through a heat palette (black→blue→cyan→red→yellow→white)
 // Chain order: Apply as standalone look; mutually exclusive with infrared-camera; combine after with film-grain for authenticity
 
@@ -8,8 +8,24 @@ uniform float4x4 ViewProj;
 uniform texture2d image;
 
 uniform float elapsed_time;
-uniform float sensitivity    = 1.0;  // 0.5–2.0  (stretches the palette mapping)
-uniform float noise_amount   = 0.03; // 0.0–0.1
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float sensitivity <
+    string label = "Sensitivity";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float noise_amount <
+    string label = "Noise Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.03;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,7 +42,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -52,26 +68,27 @@ float3 heatPalette(float t)
     float3 c4 = float3(1.000, 0.900, 0.050); // yellow
     float3 c5 = float3(1.000, 1.000, 1.000); // white
 
+    float span = max(0.2, 0.001);
     float3 col;
     if (t < 0.2)
     {
-        col = lerp(c0, c1, t / 0.2);
+        col = lerp(c0, c1, t / span);
     }
     else if (t < 0.4)
     {
-        col = lerp(c1, c2, (t - 0.2) / 0.2);
+        col = lerp(c1, c2, (t - 0.2) / span);
     }
     else if (t < 0.6)
     {
-        col = lerp(c2, c3, (t - 0.4) / 0.2);
+        col = lerp(c2, c3, (t - 0.4) / span);
     }
     else if (t < 0.8)
     {
-        col = lerp(c3, c4, (t - 0.6) / 0.2);
+        col = lerp(c3, c4, (t - 0.6) / span);
     }
     else
     {
-        col = lerp(c4, c5, (t - 0.8) / 0.2);
+        col = lerp(c4, c5, (t - 0.8) / span);
     }
     return col;
 }
@@ -95,7 +112,7 @@ float4 mainImage(VertData v_in) : TARGET
     // --- Palette lookup ---
     float3 thermal = heatPalette(t);
 
-    return float4(thermal, src.a);
+    return float4(saturate(thermal), src.a);
 }
 
 technique Draw
