@@ -5,10 +5,40 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 
-uniform float strength = 0.7;
-uniform float shadow_r = 0.3;
-uniform float shadow_g = 0.5;
-uniform float shadow_b = 0.4;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float shadow_r <
+    string label = "Shadow Red";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+
+uniform float shadow_g <
+    string label = "Shadow Green";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float shadow_b <
+    string label = "Shadow Blue";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -25,7 +55,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -53,9 +83,9 @@ float4 mainImage(VertData v_in) : TARGET
     float3 coolHighlight = tinted + float3(-0.03, 0.01, 0.06) * highlightMask;
 
     float3 graded = saturate(coolHighlight);
-    float3 result = lerp(rgb, graded, strength);
+    float3 result = lerp(rgb, graded, saturate(strength));
 
-    return float4(result, col.a);
+    return float4(saturate(result), col.a);
 }
 
 technique Draw
