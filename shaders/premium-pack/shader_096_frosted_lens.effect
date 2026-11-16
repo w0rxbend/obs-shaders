@@ -1,7 +1,7 @@
 // Filename: shader_096_frosted_lens.effect
 // Category: Weather / atmosphere pack
 // Effect: Frosted lens
-// Visual principle: procedural atmospheric layers, moving shadows, lens streaks, and brightness pulses.
+// Visual principle: small-kernel diffusion through a milky lens, stronger away from center, with a cool highlight veil.
 // What makes it cool: it adds environmental storytelling without external image textures.
 // Suggested source type: webcam, game capture, video source, image source
 // Suggested shader-chain combinations: this shader -> cinematic grade -> lens dirt
@@ -11,17 +11,55 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
+uniform float2 uv_pixel_interval;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.93;
-uniform float speed = 1.55;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.55;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,55 +77,56 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float streak = pow(saturate(1.0 - abs(frac(uv.x * 28.0 + uv.y * 7.0 - t * 1.6) - 0.5) * 20.0), 2.0);
-    float flakes = step(0.985 - amount * 0.006, hash12(floor((uv + float2(0.0, t * 0.05)) * uv_size / 6.0)));
-    float shadow = 0.75 + 0.25 * sin(uv.x * 5.0 + uv.y * 3.0 + t * 0.7);
-    float2 warp = float2(streak * 0.006 * amount, flakes * 0.003) * intensity;
-    float4 src = image.Sample(textureSampler, clamp(uv + warp, 0.0, 1.0));
-    float3 atmosphere = float3(0.700, 0.820, 1.000);
-    float3 out_rgb = src.rgb * lerp(1.0, shadow, 0.20 * intensity);
-    out_rgb = lerp(out_rgb, atmosphere, 0.12 * amount);
-    out_rgb += (streak + flakes) * atmosphere * 0.35 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float edge = saturate(length(from_center));
+
+    float phase = fmod(elapsed_time * speed * 0.45, 6.28318530718);
+    float breathe = 0.85 + 0.15 * sin(phase);
+    float spread = (1.6 + amount * 2.2) * breathe * max(intensity, 0.0);
+    float2 px = uv_pixel_interval * spread;
+
+    float3 blurred = color.rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(-px.x, -px.y), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(0.0, -px.y), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(px.x, -px.y), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(-px.x, 0.0), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(px.x, 0.0), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(-px.x, px.y), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(0.0, px.y), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(px.x, px.y), 0.0, 1.0)).rgb;
+    blurred /= max(9.0, 0.001);
+
+    float luma = dot(color.rgb, float3(0.299, 0.587, 0.114));
+    float highlight = saturate((luma - 0.62) / max(0.38, 0.001));
+    float frost_mix = saturate((0.42 + 0.28 * edge) * intensity * (0.55 + 0.45 * saturate(amount)));
+    float3 milk = float3(0.86, 0.91, 0.96);
+    float3 diffused = lerp(color.rgb, blurred, frost_mix);
+    float3 frosted = lerp(diffused, milk, frost_mix * (0.08 + 0.10 * highlight));
+    frosted = saturate(frosted);
+
+    float3 rgb = lerp(color.rgb, frosted, saturate(opacity));
+    return float4(rgb, alphaOut(color.a));
 }
 
 technique Draw
