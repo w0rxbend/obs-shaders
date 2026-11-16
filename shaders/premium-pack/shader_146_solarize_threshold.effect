@@ -1,8 +1,8 @@
 // Filename: shader_146_solarize_threshold.effect
 // Category: Extreme / transition expansion
 // Effect: Solarize threshold
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: fold tones above a luminance threshold back down the tone curve, slightly less on the center.
+// What makes it cool: highlights solarize while a centered talking-head stays recognizable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.93;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +82,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -75,17 +99,27 @@ float alphaOut(float sampled_alpha)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 1.04) + sin(t * 0.37 + 2.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 146.0), cos(t * 0.73 + 3.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 delta = uv - float2(center_x, center_y);
+    float radius = length(float2(delta.x * aspect, delta.y));
+
+    // One sine cycle is 2π/speed seconds. Default 1.73 is about 0.28 Hz.
+    float pulse = sin(elapsed_time * speed);
+    float norm = saturate(intensity / max(2.0, 0.001));
+    float base = lerp(0.72, 0.38, norm);
+    float centerLift = (1.0 - saturate(radius)) * 0.05;
+    float threshold = saturate(base + centerLift + 0.02 * pulse);
+
+    float luma = dot(source.rgb, float3(0.2126, 0.7152, 0.0722));
+    float knee = 0.12;
+    float above = smoothstep(max(threshold - knee, 0.0), threshold + knee, luma);
+    float3 folded = saturate((float3(threshold, threshold, threshold) * 2.0) - source.rgb);
+    float3 solar = lerp(source.rgb, folded, above);
+    float3 rgb = lerp(source.rgb, solar, saturate(amount));
+    return float4(saturate(rgb), alphaOut(source.a));
 }
 
 technique Draw
