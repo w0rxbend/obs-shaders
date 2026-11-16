@@ -4,18 +4,39 @@
 // twist : radial twist amount (0.0–5.0, default 2.0)
 // zoom  : tunnel zoom depth   (0.1–2.0, default 0.5)
 
-uniform float speed = 0.5;
-uniform float twist = 2.0;
-uniform float zoom  = 0.5;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float twist <
+    string label = "Twist";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0;
+
+uniform float zoom <
+    string label = "Zoom";
+    string widget_type = "slider";
+    float minimum = 0.1;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.5;
 
 uniform float elapsed_time;
+uniform float2 uv_size;
 
 uniform texture2d image;
 
 sampler_state textureSampler {
     Filter   = Linear;
-    AddressU = Wrap;
-    AddressV = Wrap;
+    AddressU = Clamp;
+    AddressV = Clamp;
 };
 
 struct VertData {
@@ -26,25 +47,37 @@ struct VertData {
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 centered = uv - 0.5;
+    centered.x *= aspect;
 
-    // Center coordinates
-    float2 p = uv * 2.0 - 1.0;
+    float radius = length(centered);
+    float reach = length(float2(0.5 * aspect, 0.5));
+    reach = max(reach, 0.001);
+    float radius_norm = saturate(radius / reach);
+    float2 direction = centered / max(radius, 0.001);
 
-    float r   = length(p);
-    float phi = atan2(p.y, p.x);   // angle in [-pi, pi]
+    // Wrap so a long stream does not lose the spin inside a huge sine.
+    float tau = 6.28318530718;
+    float phase = fmod(elapsed_time * speed, tau);
 
-    // Tunnel depth: as r shrinks toward 0 we dive "into" the tunnel
-    // Map the radial distance to a repeating UV.x (depth)
-    float depth = zoom / (r + 0.0001);
+    // Cubic rim bend reads as the tunnel. Scale it back so the face stays near 1:1.
+    float curved = radius_norm * (1.0 + zoom * 0.55 * radius_norm * radius_norm);
+    float compensate = 1.0 / max(1.0 + zoom * 0.10, 0.001);
+    float ring = sin(radius_norm * 8.0 - phase * 2.0) * zoom * 0.04 * radius_norm;
+    float sampled_norm = (curved + ring) * compensate;
 
-    // Add twist: angle rotates with depth and time
-    float angle = phi + twist * r + elapsed_time * speed;
+    // Twist starts outside the head and grows toward the rim.
+    float rim = saturate((radius_norm - 0.28) / max(0.72, 0.001));
+    float spin = rim * rim * (twist * 0.18 + sin(phase) * 0.25);
+    float spin_c = cos(spin);
+    float spin_s = sin(spin);
+    direction = float2(
+        direction.x * spin_c - direction.y * spin_s,
+        direction.x * spin_s + direction.y * spin_c);
 
-    // Convert polar tunnel coords to rectangular UV
-    // Wrap naturally: frac handles the repetition
-    float2 uvWarp;
-    uvWarp.x = frac(depth - elapsed_time * speed);
-    uvWarp.y = frac(angle / (3.14159265 * 2.0));
-
-    return image.Sample(textureSampler, uvWarp);
+    float2 warped = direction * sampled_norm * reach;
+    warped.x /= max(aspect, 0.001);
+    float2 sample_uv = saturate(warped + 0.5);
+    return image.Sample(textureSampler, sample_uv);
 }
