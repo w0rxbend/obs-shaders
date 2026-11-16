@@ -1,8 +1,8 @@
 // Filename: shader_125_tiktok_soft_glam.effect
 // Category: Portrait / beauty expansion
 // Effect: TikTok soft glam
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: edge-aware skin softening, rosy highlight glow, lifted shadows, and a gentle face vignette.
+// What makes it cool: a talking-head source keeps a recognizable face while the frame picks up a soft glam finish.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,61 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.85;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +83,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -73,19 +98,66 @@ float alphaOut(float sampled_alpha)
     return a * saturate(opacity);
 }
 
+float4 sampleClamped(float2 uv)
+{
+    float2 safe_uv = clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0));
+    return image.Sample(textureSampler, safe_uv);
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.87) + sin(t * 0.37 + 8.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 125.0), cos(t * 0.73 + 4.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float4 source = sampleClamped(uv);
+
+    float reach = 1.25 + amount * 3.0;
+    float2 near_px = uv_pixel_interval * reach;
+    float2 far_px = near_px * 2.0;
+
+    float3 soft_rgb = source.rgb * 0.36;
+    soft_rgb += sampleClamped(uv + float2(near_px.x, 0.0)).rgb * 0.16;
+    soft_rgb += sampleClamped(uv - float2(near_px.x, 0.0)).rgb * 0.16;
+    soft_rgb += sampleClamped(uv + float2(0.0, near_px.y)).rgb * 0.16;
+    soft_rgb += sampleClamped(uv - float2(0.0, near_px.y)).rgb * 0.16;
+
+    float3 glow_rgb = sampleClamped(uv + float2(far_px.x, 0.0)).rgb;
+    glow_rgb += sampleClamped(uv - float2(far_px.x, 0.0)).rgb;
+    glow_rgb += sampleClamped(uv + float2(0.0, far_px.y)).rgb;
+    glow_rgb += sampleClamped(uv - float2(0.0, far_px.y)).rgb;
+    glow_rgb *= 0.25;
+
+    float luma = dot(source.rgb, float3(0.299, 0.587, 0.114));
+    float soft_luma = dot(soft_rgb, float3(0.299, 0.587, 0.114));
+    float detail = saturate(abs(luma - soft_luma) * 7.0);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float center_dist = length(from_center);
+    float face_reach = saturate(1.0 - center_dist * 0.85);
+    float grade_amt = saturate(amount);
+    float soften = saturate(grade_amt * 0.55) * (1.0 - detail) * lerp(0.65, 1.0, face_reach);
+
+    float3 glam = lerp(source.rgb, soft_rgb, soften);
+    float glam_luma = dot(glam, float3(0.299, 0.587, 0.114));
+    glam += float3(1.0, 0.90, 0.86) * (1.0 - glam_luma) * 0.07 * grade_amt;
+    glam = (glam - 0.5) * (1.0 + 0.08 * grade_amt) + 0.5;
+    glam = lerp(glam, glam * float3(1.05, 0.96, 0.93), saturate(grade_amt * 0.70));
+
+    float glow_luma = dot(glow_rgb, float3(0.299, 0.587, 0.114));
+    float highlight = smoothstep(0.42, 0.85, glow_luma);
+    // Default speed 1.73 * 0.45 is about 0.12 Hz, under a 3 Hz full-frame flash.
+    float phase = fmod(elapsed_time * speed * 0.45, 6.283185307);
+    float breathe = 0.90 + 0.10 * sin(phase);
+    glam += glow_rgb * float3(1.0, 0.62, 0.70) * highlight * (0.16 * grade_amt) * breathe * lerp(0.45, 1.0, face_reach);
+
+    float mid = saturate(1.0 - abs(glam_luma - 0.52) * 2.8);
+    glam.r += mid * face_reach * 0.045 * grade_amt;
+    glam.g += mid * face_reach * 0.012 * grade_amt;
+
+    float vignette = smoothstep(1.25, 0.20, center_dist);
+    glam *= lerp(1.0, lerp(0.90, 1.03, vignette), saturate(grade_amt * 0.55));
+
+    float3 graded = lerp(source.rgb, saturate(glam), saturate(intensity * 0.72));
+    return float4(saturate(graded), alphaOut(source.a));
 }
 
 technique Draw
