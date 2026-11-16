@@ -1,27 +1,71 @@
 // Filename: shader_090_watercolor_wash.effect
 // Category: Experimental art pack
 // Effect: Watercolor wash
-// Visual principle: stylized color quantization, edge emphasis, pattern overlays, and painterly sampling.
-// What makes it cool: it makes live footage look intentionally illustrated instead of merely filtered.
+// Visual principle: soft pigment bleed, paper grain, and darker color pooled on edges.
+// What makes it cool: live footage reads as a wet wash while a talking head stays recognizable.
 // Suggested source type: webcam, image source, video source, VJ visuals
-// Suggested shader-chain combinations: this shader -> posterize or halftone -> light vignette
+// Suggested shader-chain combinations: this shader -> light vignette
 // Performance cost: medium
 // Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
+uniform float2 uv_pixel_interval;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.85;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,13 +99,6 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
@@ -75,21 +112,52 @@ float alphaOut(float sampled_alpha)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 px = uv_pixel_interval * (1.0 + amount * 2.0);
-    float4 c = color;
-    float4 cx = image.Sample(textureSampler, clamp(uv + float2(px.x, 0.0), 0.0, 1.0));
-    float4 cy = image.Sample(textureSampler, clamp(uv + float2(0.0, px.y), 0.0, 1.0));
-    float edge = length(c.rgb - cx.rgb) + length(c.rgb - cy.rgb);
-    float levels = 4.0 + floor(amount * 5.0);
-    float3 quant = floor(c.rgb * levels) / levels;
-    float dots = step(0.48, frac((uv.x + uv.y + sin(elapsed_time * speed) * 0.03) * uv_size.x / (10.0 + amount * 10.0)));
-    float gray = luma3(quant);
-    float3 ink = lerp(quant, float3(1.000, 0.700, 0.200) * (0.25 + gray), 0.22 * intensity);
-    ink = lerp(ink, float3(0.02, 0.02, 0.025), saturate(edge * 2.5 * intensity));
-    ink += dots * 0.035 * intensity;
-    return float4(saturate(ink), alphaOut(c.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float bleed_px = 2.5 + amount * 6.0;
+    // Kernel crawl stays slow at the default so the wash does not strobe.
+    float drift = elapsed_time * speed * 0.2;
+
+    float3 bleed = source.rgb;
+    [unroll]
+    for (int tap = 0; tap < 8; tap++)
+    {
+        float ang = float(tap) * 0.78539816 + drift;
+        float2 offset = float2(cos(ang), sin(ang)) * uv_pixel_interval * bleed_px;
+        float2 tap_uv = clamp(uv + offset, 0.0, 1.0);
+        bleed += image.Sample(textureSampler, tap_uv).rgb;
+    }
+    bleed /= max(9.0, 0.001);
+
+    float3 pigment = lerp(bleed, source.rgb, 0.2);
+    float pigment_luma = luma3(pigment);
+    float3 gray = float3(pigment_luma, pigment_luma, pigment_luma);
+    pigment = lerp(gray, pigment, 1.0 + 0.25 * saturate(intensity));
+
+    float bands = 8.0;
+    float3 stepped = floor(saturate(pigment) * bands + 0.5) / max(bands, 0.001);
+    pigment = lerp(pigment, stepped, 0.12 * saturate(amount));
+
+    float thin = smoothstep(0.4, 0.92, pigment_luma);
+    float3 paper = float3(0.97, 0.94, 0.88);
+    pigment = lerp(pigment, pigment * paper + paper * 0.06, thin * 0.22);
+
+    float settle = saturate(abs(luma3(source.rgb) - luma3(bleed)) * 5.0);
+    pigment = lerp(pigment, pigment * float3(0.72, 0.66, 0.60), settle * 0.4 * saturate(intensity));
+
+    float2 grain_px = floor(uv * uv_size * 0.2);
+    float grain = hash12(grain_px) - 0.5;
+    pigment += grain * 0.045;
+
+    float2 from_center = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float dist = length(from_center);
+    float edge_weight = smoothstep(0.02, 0.75, dist);
+    float wash = saturate(intensity) * lerp(0.58, 0.88, edge_weight);
+
+    float3 shown = lerp(source.rgb, saturate(pigment), wash);
+    return float4(saturate(shown), alphaOut(source.a));
 }
 
 technique Draw
