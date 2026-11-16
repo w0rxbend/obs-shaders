@@ -1,6 +1,6 @@
 // Performance: low
 // Webcam safe: yes
-// Preserves alpha: no
+// Preserves alpha: yes
 // Use case: Orange/amber HUD tint with scanlines, vignette, and animated HUD status lines scrolling at screen edges
 // Chain order: Apply as a final display overlay after color grading; stack after starship-monitor for dual-color monitor effect
 
@@ -8,12 +8,56 @@ uniform float4x4 ViewProj;
 uniform texture2d image;
 
 uniform float elapsed_time;
-uniform float tint_r    = 1.0;  // default orange
-uniform float tint_g    = 0.5;
-uniform float tint_b    = 0.0;
-uniform float scanlines = 0.25; // 0.0–1.0
-uniform float vignette  = 0.35; // 0.0–1.0
-uniform float hud_speed = 1.0;  // 0.0–3.0
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float tint_r <
+    string label = "Tint Red";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float tint_g <
+    string label = "Tint Green";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float tint_b <
+    string label = "Tint Blue";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.0;
+
+uniform float scanlines <
+    string label = "Scanlines";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.25;
+
+uniform float vignette <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.35;
+
+uniform float hud_speed <
+    string label = "HUD Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.0;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -30,7 +74,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -48,7 +92,6 @@ float hash21(float2 p)
 float hudLine(float2 uv, float t)
 {
     float result = 0.0;
-    float3 tint  = float3(tint_r, tint_g, tint_b);
 
     // --- Left edge: vertical scrolling lines ---
     // Lines scroll upward along the left strip (0..0.06 of width)
@@ -62,10 +105,10 @@ float hudLine(float2 uv, float t)
             float line_y = fmod(t * speed + offset, 1.0);
             float line_w = 0.003 + hash11(i * 3.71) * 0.01;
             float dist   = abs(uv.y - line_y);
-            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.8;
-            // Segment gaps
+            // A gap hides this line only. Zeroing the accumulator also erased lines already drawn.
             float gap = hash21(float2(floor(uv.y * 30.0), i));
-            if (gap < 0.25) result = 0.0;
+            if (gap >= 0.25)
+                result += exp(-(dist / max(line_w, 0.001)) * (dist / max(line_w, 0.001)) * 10.0) * 0.8;
         }
     }
 
@@ -79,9 +122,9 @@ float hudLine(float2 uv, float t)
             float line_y = fmod(t * speed + offset + 0.5, 1.0);
             float line_w = 0.004 + hash11(i * 2.91 + 1.0) * 0.008;
             float dist   = abs(uv.y - line_y);
-            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.7;
             float gap = hash21(float2(floor(uv.y * 25.0) + 50.0, i));
-            if (gap < 0.3) result = 0.0;
+            if (gap >= 0.3)
+                result += exp(-(dist / max(line_w, 0.001)) * (dist / max(line_w, 0.001)) * 10.0) * 0.7;
         }
     }
 
@@ -95,9 +138,9 @@ float hudLine(float2 uv, float t)
             float line_x = fmod(t * speed + offset, 1.0);
             float line_w = 0.005 + hash11(i * 4.55 + 0.8) * 0.015;
             float dist   = abs(uv.x - line_x);
-            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.75;
             float gap = hash21(float2(i, floor(uv.x * 20.0)));
-            if (gap < 0.2) result = 0.0;
+            if (gap >= 0.2)
+                result += exp(-(dist / max(line_w, 0.001)) * (dist / max(line_w, 0.001)) * 10.0) * 0.75;
         }
     }
 
@@ -108,12 +151,12 @@ float hudLine(float2 uv, float t)
         {
             float speed  = hud_speed * (0.5 + i * 0.35);
             float offset = hash11(i * 6.29 + 3.9);
-            float line_x = fmod(1.0 - t * speed + offset, 1.0); // reverse
+            float line_x = frac(1.0 - t * speed + offset); // reverse; frac stays in 0..1 when the dividend goes negative
             float line_w = 0.006 + hash11(i * 3.14 + 2.0) * 0.012;
             float dist   = abs(uv.x - line_x);
-            result      += exp(-dist * dist / (line_w * line_w) * 10.0) * 0.7;
             float gap = hash21(float2(i + 10.0, floor(uv.x * 18.0)));
-            if (gap < 0.25) result = 0.0;
+            if (gap >= 0.25)
+                result += exp(-(dist / max(line_w, 0.001)) * (dist / max(line_w, 0.001)) * 10.0) * 0.7;
         }
     }
 
@@ -138,7 +181,7 @@ float4 mainImage(VertData v_in) : TARGET
     );
     // Normalize to preserve approximate brightness
     float tinted_luma = dot(tinted, float3(0.299, 0.587, 0.114));
-    if (tinted_luma > 0.001) tinted *= luma / tinted_luma;
+    tinted *= luma / max(tinted_luma, 0.001);
     col = lerp(col, tinted, 0.85);
     col = saturate(col);
 
