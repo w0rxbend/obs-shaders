@@ -1,8 +1,8 @@
 // Filename: shader_150_corrupted_codec_blocks.effect
 // Category: Extreme / transition expansion
 // Effect: Corrupted codec blocks
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: square macroblocks stay mostly sharp, while a few copy the wrong motion vector, collapse to one color, and pick up a chroma error.
+// What makes it cool: a talking-head stays recognizable while scattered codec blocks fail around the frame.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 0.85;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.19;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,42 +93,62 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
-    if (!preserve_alpha)
+    if (preserve_alpha)
     {
-        a = 1.0;
+        return sampled_alpha;
     }
-    return a * saturate(opacity);
+    return 1.0;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 1.04) + sin(t * 0.37 + 6.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 150.0), cos(t * 0.73 + 7.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 pixel = float2(1.0 / max(uv_size.x, 1.0), 1.0 / max(uv_size.y, 1.0));
+    float block_pixels = max(10.0 + max(amount, 0.0) * 18.0, 0.001);
+    float2 cell = max(pixel * block_pixels, float2(0.001, 0.001));
+    float2 block_id = floor(uv / cell);
+    float2 block_center = (block_id + 0.5) * cell;
+    float2 focus = float2(center_x, center_y);
+    float2 from_focus = (block_center - focus) * float2(aspect, 1.0);
+    float edge = saturate(length(from_focus) * 1.6);
+
+    // Default speed 1.19 retargets macroblocks at about 1 Hz, not a full-frame flash.
+    float wrapped = fmod(max(elapsed_time, 0.0), 1024.0);
+    float tick = floor(wrapped * max(speed, 0.0) * 0.85);
+    float chance = saturate(amount) * (0.22 + edge * 0.18);
+    float corrupt = step(1.0 - chance, hash12(block_id + float2(tick, 3.0)));
+
+    float2 jitter = float2(
+        hash12(block_id.yx + float2(tick, 9.0)) - 0.5,
+        hash12(block_id + float2(17.0, tick)) - 0.5
+    );
+    float hop = 1.0 + step(0.55, hash12(float2(block_id.x + block_id.y, tick + 2.0)));
+    float drive = min(max(intensity, 0.0), 2.0);
+    float2 motion = jitter * 2.0 * hop * cell * corrupt * min(drive, 1.5);
+    float dc_gate = step(0.62, hash12(block_id + float2(tick, 21.0)));
+    float2 shifted = uv + motion;
+    float2 flat_uv = block_center + motion;
+    float2 coded_uv = clamp(lerp(shifted, flat_uv, dc_gate * corrupt), 0.0, 1.0);
+
+    float3 moved = image.Sample(textureSampler, coded_uv).rgb;
+    float levels = max(14.0 - drive * 3.0, 4.0);
+    float3 quantized = floor(moved * levels + 0.5) / max(levels, 0.001);
+    float tint = hash12(block_id + float2(8.0, tick));
+    float3 chroma = float3(0.72 + tint * 0.45, 0.92, 1.18 - tint * 0.35);
+    float3 broken = lerp(quantized, quantized * chroma, 0.55);
+
+    float3 dc = image.Sample(textureSampler, clamp(block_center, 0.0, 1.0)).rgb;
+    float block_mix = min(0.34 * saturate(amount) * drive, 0.55);
+    float3 blocked = lerp(source.rgb, dc, block_mix);
+    float3 effected = saturate(lerp(blocked, broken, corrupt * saturate(drive)));
+    float3 shown = lerp(source.rgb, effected, saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
