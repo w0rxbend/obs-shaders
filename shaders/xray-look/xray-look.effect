@@ -1,18 +1,48 @@
 // Performance: low
 // Webcam safe: yes
-// Preserves alpha: no
+// Preserves alpha: yes
 // Use case: Inverted high-contrast B&W with Sobel edge enhancement tinted blue and X-ray noise texture
 // Chain order: Apply as standalone sci-fi look; optionally follow with glow-bloom using a blue color for edge glow
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 
 uniform float2 uv_pixel_interval;
 uniform float elapsed_time;
-uniform float contrast       = 2.5;  // 1.0–5.0
-uniform float blue_tint      = 0.35; // 0.0–1.0
-uniform float noise_amount   = 0.05; // 0.0–0.2
-uniform float edge_strength  = 0.8;  // 0.0–2.0
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.5;
+
+uniform float blue_tint <
+    string label = "Blue Tint";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.35;
+
+uniform float noise_amount <
+    string label = "Noise Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.05;
+
+uniform float edge_strength <
+    string label = "Edge Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.8;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -29,7 +59,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
