@@ -2,9 +2,29 @@
 // 1920s silent movie look: desaturated, high contrast, vignette, film jitter,
 // vertical shift speed-up artifact.
 
-uniform float contrast     = 1.8; // 1.0 – 3.0
-uniform float vignette     = 0.6; // 0.0 – 1.0
-uniform float jitter_speed = 0.8; // 0.0 – 3.0
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.8;
+
+uniform float vignette <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.6;
+
+uniform float jitter_speed <
+    string label = "Jitter Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.8;
 
 uniform texture2d image;
 uniform float elapsed_time;
@@ -25,11 +45,6 @@ float Hash11(float x)
     return frac(sin(x * 127.1) * 43758.5453);
 }
 
-float Hash21(float2 p)
-{
-    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
-}
-
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
@@ -38,40 +53,38 @@ float4 mainImage(VertData v_in) : TARGET
     float frameSeed = floor(elapsed_time * (jitter_speed * 8.0 + 1.0));
 
     // Horizontal jitter — small random offset per frame
-    float hShift = (Hash11(frameSeed)          - 0.5) * 0.006 * jitter_speed;
+    float hShift = (Hash11(frameSeed) - 0.5) * 0.006 * jitter_speed;
     // Vertical shift — occasional fast pull (speed-up artifact)
-    float vShift = (Hash11(frameSeed + 77.3)   - 0.5) * 0.004 * jitter_speed;
+    float vShift = (Hash11(frameSeed + 77.3) - 0.5) * 0.004 * jitter_speed;
     // Larger vertical lurch every ~3 seconds
     float lurchSeed = floor(elapsed_time * jitter_speed * 0.33);
-    float lurch     = (Hash11(lurchSeed + 13.7) - 0.5) * 0.02 * jitter_speed;
+    float lurch = (Hash11(lurchSeed + 13.7) - 0.5) * 0.02 * jitter_speed;
 
-    uv.x = frac(uv.x + hShift);
-    uv.y = frac(uv.y + vShift + lurch);
+    // Clamp. Wrapping would pull the far edge into a talking-head frame.
+    uv = saturate(uv + float2(hShift, vShift + lurch));
 
     float4 col = image.Sample(textureSampler, uv);
 
     // Desaturate
     float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
 
-    // High contrast S-curve via pow
-    // Raise mid-tones, crush shadows/highlights
-    float c = saturate((luma - 0.5) * contrast + 0.5);
-    // Soft S-curve on top
-    c = smoothstep(0.0, 1.0, c);
+    // High contrast around mid-grey, then a soft S-curve
+    float graded = saturate((luma - 0.5) * contrast + 0.5);
+    graded = smoothstep(0.0, 1.0, graded);
 
     // Warm paper tone (yellowish highlights, brownish shadows)
-    float3 paper  = float3(0.98, 0.95, 0.82);
+    float3 paper = float3(0.98, 0.95, 0.82);
     float3 shadow = float3(0.10, 0.08, 0.06);
-    float3 toned  = lerp(shadow, paper, c);
+    float3 toned = lerp(shadow, paper, graded);
 
-    // Per-frame exposure flicker
+    // Per-frame exposure flicker. 8% swing, not a black or white flash.
     float flick = 0.92 + 0.08 * Hash11(frameSeed + 200.0);
     toned = saturate(toned * flick);
 
     // Radial vignette
     float2 centered = uv - 0.5;
-    float  dist     = dot(centered, centered);
-    float  vig      = 1.0 - smoothstep(0.10, 0.65, dist * 4.0);
+    float dist = dot(centered, centered);
+    float vig = 1.0 - smoothstep(0.10, 0.65, dist * 4.0);
     toned = toned * lerp(1.0, vig, vignette);
 
     return float4(saturate(toned), col.a);
