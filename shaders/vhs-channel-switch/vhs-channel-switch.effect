@@ -6,10 +6,34 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
+uniform float elapsed_time;
 
-uniform float progress       = 0.5;   // 0.0 = clean signal, 1.0 = fully wiped to static
-uniform float noise_strength = 0.3;   // 0.0–0.5 intensity of static noise bands
-uniform float chroma         = 0.012; // 0.0–0.03 chromatic separation amount
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float progress <
+    string label = "Progress";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.25; // 0.0 = clean signal, 1.0 = fully wiped to static
+
+uniform float noise_strength <
+    string label = "Noise Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.3; // 0.0–0.5 intensity of static noise bands
+
+uniform float chroma <
+    string label = "Chroma";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.03;
+    float step = 0.001;
+> = 0.012; // 0.0–0.03 chromatic separation amount
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,7 +50,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -42,41 +66,32 @@ float hash2(float2 p)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv    = v_in.uv;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float amount = saturate(progress);
+    float noiseAmt = max(noise_strength, 0.0);
+    float split = max(chroma, 0.0) * amount * 2.0;
 
-    // --- Chroma-shift sample (aberration widens as progress increases) ---
-    float  shift = chroma * progress * 2.0;
-    float  rr    = image.Sample(textureSampler, uv + float2(-shift, 0.0)).r;
-    float  gg    = image.Sample(textureSampler, uv).g;
-    float  bb    = image.Sample(textureSampler, uv + float2( shift, 0.0)).b;
-    float  aa    = image.Sample(textureSampler, uv).a;
-    float4 color = float4(rr, gg, bb, aa);
+    float4 source = image.Sample(textureSampler, uv);
+    float red = image.Sample(textureSampler, clamp(uv + float2(-split, 0.0), 0.0, 1.0)).r;
+    float blue = image.Sample(textureSampler, clamp(uv + float2(split, 0.0), 0.0, 1.0)).b;
+    float3 signal = float3(red, source.g, blue);
 
-    // --- VHS noise bands (horizontal stripes of static) ---
-    // Bands migrate vertically with a time-like hash seeded on progress
-    float  bandSeed = hash1(floor(progress * 37.0));
-    float  bandFreq = 12.0;
-    float  bandY    = frac(uv.y * bandFreq + bandSeed);
+    float bandSeed = hash1(floor(amount * 37.0));
+    float bandY = frac(uv.y * 12.0 + bandSeed + elapsed_time * 0.35);
+    float grain = hash2(uv * float2(213.7, 97.3) + float2(elapsed_time * 9.0, bandSeed));
+    float bandMask = smoothstep(0.55, 0.65, bandY) * noiseAmt * amount * 2.0;
+    signal = lerp(signal, float3(grain, grain, grain), saturate(bandMask));
 
-    // Static grain per pixel
-    float  grain    = hash2(uv * float2(213.7, 97.3) + float2(progress * 100.0, 0.0));
+    // Jag only while the wipe is partial, so 0 stays clean and 1 stays full static.
+    float partial = saturate(amount * (1.0 - amount) * 4.0);
+    float noiseOff = (hash1(floor(uv.y * 80.0)) - 0.5) * noiseAmt * 0.25 * partial;
+    float edgeY = lerp(-0.02, 1.02, amount) + noiseOff;
+    float wipe = saturate(1.0 - smoothstep(edgeY - 0.02, edgeY + 0.02, uv.y));
 
-    // Band mask: narrow bands of heavy static
-    float  bandMask = smoothstep(0.55, 0.65, bandY) * noise_strength * progress * 2.0;
-    bandMask        = clamp(bandMask, 0.0, 1.0);
+    float snow = hash2(float2(floor(uv.x * 180.0), floor(uv.y * 90.0)) + float2(elapsed_time * 11.0, bandSeed));
+    signal = lerp(signal, float3(snow, snow, snow), wipe);
 
-    // Mix static into the color
-    float  staticV  = grain;
-    color.rgb       = lerp(color.rgb, float3(staticV, staticV, staticV), bandMask);
-
-    // --- Global wipe: top half goes first, driven by progress ---
-    // The wipe sweeps from top (uv.y=0) to bottom (uv.y=1)
-    float  edgeY    = progress;
-    float  noiseOff = (hash1(floor(uv.y * 80.0)) - 0.5) * noise_strength * 0.25;
-    float  wipeAlpha = 1.0 - smoothstep(edgeY + noiseOff - 0.02, edgeY + noiseOff + 0.02, uv.y);
-
-    color.a        *= wipeAlpha;
-    return color;
+    return float4(saturate(signal), source.a);
 }
 
 technique Draw
