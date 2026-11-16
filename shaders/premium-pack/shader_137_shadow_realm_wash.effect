@@ -1,8 +1,8 @@
 // Filename: shader_137_shadow_realm_wash.effect
 // Category: Sci-fi / fantasy expansion
 // Effect: Shadow realm wash
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: a slow violet void wash pools in the shadows and around a center, while the face stays readable.
+// What makes it cool: the shot looks pulled into a shadow realm without hiding the talking head.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.01;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.37;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,53 +82,51 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
-float hash12(float2 p)
+float luma3(float3 color)
 {
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    return dot(color, float3(0.299, 0.587, 0.114));
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.87) + sin(t * 0.37 + 2.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 137.0), cos(t * 0.73 + 5.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(center_x, center_y);
+    from_center.x *= aspect;
+    float radius = length(from_center);
+
+    // 0.16 cycles per speed unit keeps default 1.37 near 0.22 Hz, under a 3 Hz flash.
+    float phase = frac(elapsed_time * speed * 0.16);
+    float breath = 0.82 + 0.18 * sin(phase * 6.2831853);
+    float veil = 0.55 + 0.45 * sin(from_center.y * 5.5 - phase * 6.2831853);
+    float pool = smoothstep(0.12, 1.05, radius);
+    float wash = saturate(0.35 + pool * 0.40 + veil * 0.25) * breath;
+
+    float gray = luma3(source.rgb);
+    float shadow = 1.0 - smoothstep(0.10, 0.70, gray);
+    float strength = saturate(intensity * 0.45);
+    float3 realm = lerp(float3(gray, gray, gray), float3(0.28, 0.10, 0.46), 0.72);
+    float3 lifted = lerp(source.rgb, source.rgb * float3(0.78, 0.70, 1.05), strength);
+    float cover = saturate(wash * (0.22 + 0.55 * shadow) * amount * strength);
+    float3 styled = saturate(lerp(lifted, realm, cover));
+    float3 rgb = lerp(source.rgb, styled, saturate(opacity));
+    return float4(rgb, alphaOut(source.a));
 }
 
 technique Draw
