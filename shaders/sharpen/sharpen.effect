@@ -1,8 +1,23 @@
 // A8 — sharpen
 // Unsharp mask sharpening using uv_pixel_interval.
 
-uniform float strength = 0.8; // 0.0 – 3.0
-uniform float size     = 1.0; // 0.5 – 4.0  (blur kernel scale)
+// 0.0 – 3.0
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.8;
+
+// 0.5 – 4.0 (blur kernel scale)
+uniform float size <
+    string label = "Size";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 4.0;
+    float step = 0.1;
+> = 1.0;
 
 uniform float2    uv_pixel_interval;
 uniform texture2d image;
