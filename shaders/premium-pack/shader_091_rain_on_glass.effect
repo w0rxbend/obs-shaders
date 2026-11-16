@@ -1,27 +1,70 @@
 // Filename: shader_091_rain_on_glass.effect
 // Category: Weather / atmosphere pack
 // Effect: Rain on glass
-// Visual principle: radial or directional UV warping with small compensating zoom.
-// What makes it cool: it bends the camera feed like a lens or energy field while preserving the source.
+// Visual principle: round beads and thin falling streaks refract the source like water on a pane.
+// What makes it cool: the camera reads as shot through wet glass while a talking head stays recognizable.
 // Suggested source type: webcam, game capture, image source, video source
 // Suggested shader-chain combinations: this shader -> chromatic aberration -> bloom
 // Performance cost: low
 // Alpha safe: yes
-// Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
+// Limitations: single-pass drops and streaks; no external textures; not a multi-layer fluid sim.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.93;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.93;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,43 +93,112 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        a = saturate(opacity);
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 center = float2(center_x, center_y);
-    float2 p = uv - center;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
     float t = elapsed_time * speed;
-    float radius = length(p);
-    float wave = sin(radius * 25.0 - t * 3.0) * 0.025 * amount * intensity;
-    float bend = dot(p, p) * (0.22 + 1.0 * 0.025) * amount;
-    float2 dir = normalize(p + float2(0.0001, 0.0002));
-    float2 uv = center + p / (1.04 + abs(wave) + bend * 0.2) + dir * wave + p * bend;
-    float4 warped = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float grid = max(5.0 + amount * 2.0, 0.001);
+    float density = saturate(amount) * 0.34;
+    // Subtract time so beads travel toward uv.y = 1 (down the frame).
+    float2 field = float2(
+        uv.x * aspect + (center_x - 0.5) * 0.4,
+        uv.y - t * 0.16 + (center_y - 0.5) * 0.4);
+    float2 scaled = field * grid;
+    float2 cell = floor(scaled);
+
+    float best_dist = 4.0;
+    float best_radius = 0.25;
+    float2 best_delta = float2(0.0, 0.0);
+    float has_drop = 0.0;
+    float tail_mask = 0.0;
+
+    [unroll]
+    for (int j = -1; j <= 1; j++)
+    {
+        [unroll]
+        for (int i = -1; i <= 1; i++)
+        {
+            float2 nid = cell + float2(float(i), float(j));
+            float spawn = hash12(nid);
+            float2 drop_center = float2(
+                hash12(nid + float2(3.1, 1.7)),
+                hash12(nid + float2(8.2, 4.4)));
+            float radius = lerp(0.18, 0.32, hash12(nid + float2(19.0, 2.2)));
+            float big = step(hash12(nid + float2(2.2, 11.0)), 0.15);
+            radius = lerp(radius, min(radius * 1.4, 0.46), big);
+            float2 delta = scaled - (nid + drop_center);
+            float dist = length(delta);
+            if (spawn <= density && dist < radius && dist < best_dist)
+            {
+                best_dist = dist;
+                best_radius = radius;
+                best_delta = delta;
+                has_drop = 1.0;
+            }
+            float tail_x = abs(delta.x) / max(radius * 0.55, 0.001);
+            float tail = saturate(1.0 - tail_x);
+            tail *= smoothstep(0.02, 0.12, delta.y) * smoothstep(0.95, 0.25, delta.y);
+            tail *= step(spawn, density);
+            tail_mask = max(tail_mask, tail);
+        }
+    }
+
+    float lens = (1.0 - smoothstep(best_radius * 0.62, best_radius, best_dist)) * has_drop;
+    float pull = lens * 0.5 * max(intensity, 0.0) * max(amount, 0.0);
+    float2 field_offset = -best_delta / max(grid, 0.001) * pull;
+    float2 offset = float2(field_offset.x / max(aspect, 0.001), field_offset.y);
+
+    float columns = 22.0;
+    float lane_x = uv.x * columns + (center_x - 0.5) * 4.0;
+    float column_id = floor(lane_x);
+    float column_hash = hash12(float2(column_id, 4.2));
+    float lane = abs(frac(lane_x) - 0.5);
+    float thin = pow(saturate(1.0 - lane * 14.0), 2.0);
+    float run = frac(column_hash * 9.0 + uv.y - t * (0.55 + column_hash * 0.35) + (center_y - 0.5));
+    float body = smoothstep(0.0, 0.06, run) * smoothstep(0.58, 0.16, run);
+    float streak = thin * body * step(column_hash, saturate(amount) * 0.28) * max(intensity, 0.0);
+    offset.x += (column_hash - 0.5) * streak * 0.0035;
+    offset = clamp(offset, float2(-0.02, -0.02), float2(0.02, 0.02));
+
+    float fringe = 0.0014 * lens * max(intensity, 0.0);
+    float2 bent_uv = clamp(uv + offset, 0.0, 1.0);
+    float2 red_uv = clamp(bent_uv + float2(fringe, 0.0), 0.0, 1.0);
+    float4 bent = image.Sample(textureSampler, bent_uv);
+    float red = image.Sample(textureSampler, red_uv).r;
+    float3 glass = float3(red, bent.g, bent.b);
+
+    float norm = best_dist / max(best_radius, 0.001);
+    float rim = smoothstep(0.55, 0.82, norm) * (1.0 - smoothstep(0.82, 1.0, norm)) * lens;
+    float2 spec_delta = best_delta - float2(-0.08, -0.10) * best_radius;
+    float spec_dist = length(spec_delta) / max(best_radius * 0.38, 0.001);
+    float spec = pow(saturate(1.0 - spec_dist), 4.0) * lens;
+
+    glass = lerp(glass, glass * float3(0.90, 0.96, 1.04), saturate(lens * 0.65 + tail_mask * 0.25));
+    glass *= lerp(1.0, 0.92, lens * saturate(intensity));
+    glass += float3(0.85, 0.92, 1.0) * (spec * 0.62 + rim * 0.28) * max(intensity, 0.0);
+
+    float coverage = saturate(opacity) * saturate(intensity);
+    float drop_mix = coverage * saturate(lens + tail_mask * 0.8);
+    float streak_vis = streak * saturate(opacity);
+    float3 shown = lerp(source.rgb, saturate(glass), drop_mix);
+    shown += float3(0.75, 0.84, 0.92) * streak_vis * 0.2;
+    float touch = saturate(drop_mix + streak_vis);
+    shown = lerp(shown, saturate(shown), touch);
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
