@@ -1,8 +1,8 @@
 // Filename: shader_133_dragon_fire_heat.effect
 // Category: Sci-fi / fantasy expansion
 // Effect: Dragon fire heat
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: rising heat warp plus a bottom-weighted orange grade, stronger in a column under the subject.
+// What makes it cool: the lower frame shimmers like dragon breath while a talking head stays recognizable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.09;
-uniform float speed = 0.65;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +82,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,42 +93,68 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
+float valueNoise(float2 p)
 {
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    float2 cell = floor(p);
+    float2 blend = frac(p);
+    float2 smooth_blend = blend * blend * (3.0 - 2.0 * blend);
+    float corner00 = hash12(cell);
+    float corner10 = hash12(cell + float2(1.0, 0.0));
+    float corner01 = hash12(cell + float2(0.0, 1.0));
+    float corner11 = hash12(cell + float2(1.0, 1.0));
+    float row0 = lerp(corner00, corner10, smooth_blend.x);
+    float row1 = lerp(corner01, corner11, smooth_blend.x);
+    return lerp(row0, row1, smooth_blend.y);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.87) + sin(t * 0.37 + 7.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 133.0), cos(t * 0.73 + 1.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    // frac keeps a long stream inside one cycle. Default speed 0.65 is about 0.65 Hz.
+    float phase = frac(elapsed_time * speed);
+    float band_start = saturate(0.58 + (center_y - 0.5) * 0.5 - (amount - 1.0) * 0.08);
+    float vertical = saturate((uv.y - band_start) / max(1.0 - band_start, 0.001));
+    vertical = vertical * vertical * (3.0 - 2.0 * vertical);
+
+    float column_x = abs((uv.x - center_x) * aspect);
+    float half_width = 0.12 + amount * 0.08;
+    float column = 1.0 - saturate((column_x - half_width) / 0.28);
+    float heat_mask = saturate(vertical * lerp(0.55, 1.0, column));
+
+    float2 field = float2(uv.x * (6.0 + amount * 4.0), uv.y * (3.0 + amount * 2.0));
+    // UV y grows downward, so subtracting phase sends the heat field upward.
+    field.y -= phase * 2.0;
+    float coarse = valueNoise(field);
+    float fine = valueNoise(field * 2.13 + float2(4.2, 1.7));
+    float shimmer_x = coarse * 2.0 - 1.0;
+    float shimmer_y = (fine * 2.0 - 1.0) * 0.35;
+    float scale = 0.012 * intensity * heat_mask;
+    float2 sample_uv = clamp(uv + float2(shimmer_x, shimmer_y) * scale, 0.0, 1.0);
+    float4 warped = image.Sample(textureSampler, sample_uv);
+
+    float streak = smoothstep(0.78, 0.96, fine);
+    float ember = 0.85 + 0.15 * sin(phase * 6.2831853);
+    float3 breath = lerp(float3(1.0, 0.36, 0.05), float3(1.0, 0.78, 0.28), streak);
+    float grade = heat_mask * 0.34 * intensity * ember;
+    float3 graded = lerp(warped.rgb, saturate(warped.rgb * breath), saturate(grade));
+    float3 tongue = float3(1.0, 0.55, 0.12) * streak * heat_mask * 0.07 * intensity;
+    graded = saturate(graded + tongue);
+
+    float3 rgb = lerp(source.rgb, graded, saturate(opacity));
+    return float4(rgb, alphaOut(source.a));
 }
 
 technique Draw
