@@ -1,27 +1,65 @@
 // Filename: shader_115_browser_privacy_haze.effect
 // Category: Screen capture utility expansion
 // Effect: Browser privacy haze
-// Visual principle: large-kernel signal destruction with pixel quantization and procedural privacy noise.
+// Visual principle: wide horizontal smear and a cool fog veil so browser text dies while page color blocks remain.
 // What makes it cool: it hides readable details but leaves the audience aware that real content exists underneath.
 // Suggested source type: screen capture, browser source, IDEs, dashboards, documents
 // Suggested shader-chain combinations: soft vignette -> this shader -> subtle noise or scanline overlay
 // Performance cost: medium
-// Alpha safe: no
+// Alpha safe: yes
 // Limitations: single-pass approximation; no external textures; heavy multi-pass reference looks are simplified for live OBS use.
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.85;
-uniform float speed = 1.19;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.19;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = false;
 
 sampler_state textureSampler {
@@ -39,7 +77,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,48 +93,46 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
+float4 mainImage(VertData v_in) : TARGET
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float2 px = max(abs(uv_pixel_interval), float2(0.001, 0.001));
+    float spread = lerp(18.0, 72.0, saturate(amount * 0.5));
+    float2 hx = float2(px.x * spread, 0.0);
+    float2 vy = float2(0.0, px.y * spread * 0.28);
 
-float alphaOut(float sampled_alpha)
-{
-    float a = sampled_alpha;
+    float4 center = image.Sample(textureSampler, uv);
+    float4 haze = center * 0.24;
+    haze += image.Sample(textureSampler, clamp(uv + hx, 0.0, 1.0)) * 0.15;
+    haze += image.Sample(textureSampler, clamp(uv - hx, 0.0, 1.0)) * 0.15;
+    haze += image.Sample(textureSampler, clamp(uv + hx * 2.0, 0.0, 1.0)) * 0.10;
+    haze += image.Sample(textureSampler, clamp(uv - hx * 2.0, 0.0, 1.0)) * 0.10;
+    haze += image.Sample(textureSampler, clamp(uv + hx * 3.0, 0.0, 1.0)) * 0.05;
+    haze += image.Sample(textureSampler, clamp(uv - hx * 3.0, 0.0, 1.0)) * 0.05;
+    haze += image.Sample(textureSampler, clamp(uv + vy, 0.0, 1.0)) * 0.08;
+    haze += image.Sample(textureSampler, clamp(uv - vy, 0.0, 1.0)) * 0.08;
+
+    float gray = luma3(haze.rgb);
+    float veil = saturate(0.22 + 0.24 * intensity);
+    float3 fog = float3(0.62, 0.66, 0.70) * (0.50 + gray * 0.55);
+    float3 rgb = lerp(haze.rgb, fog, veil);
+    rgb = lerp(rgb, float3(gray, gray, gray), saturate(0.18 * intensity));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float band = max(4.0 + amount * 3.0, 0.001);
+    float tick = floor(elapsed_time * max(speed, 0.0) * 0.7);
+    float2 fog_cell = floor(float2(uv.x * aspect, uv.y) * float2(3.0, band));
+    float n = hash12(fog_cell + float2(center_x * 9.0, center_y * 7.0 + tick));
+    rgb *= 1.0 + (n - 0.5) * 0.10 * saturate(intensity);
+
+    float3 out_rgb = lerp(center.rgb, rgb, saturate(opacity));
+    float out_a = center.a;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        out_a = saturate(center.a);
     }
-    return a * saturate(opacity);
-}
-
-float4 mainImage(VertData v_in) : TARGET
-{
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float2 pixels = max(float2(1.0, 1.0), uv_size);
-    float block = lerp(12.0, 42.0, saturate(amount * 0.7));
-    float2 cells = max(float2(1.0, 1.0), pixels / block);
-    float2 puv = (floor(uv * cells) + 0.5) / cells;
-    float2 px = uv_pixel_interval * (8.0 + amount * 24.0);
-    float4 blur = image.Sample(textureSampler, puv) * 0.36;
-    blur += image.Sample(textureSampler, clamp(puv + float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(px.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv + float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(puv - float2(0.0, px.y), 0.0, 1.0)) * 0.16;
-    float grain = hash12(floor(uv * pixels / max(2.0, block * 0.35)) + floor(elapsed_time * speed * 12.0));
-    float gray = luma3(blur.rgb);
-    float3 tint = float3(0.080, 0.100, 0.120);
-    float3 protected_rgb = lerp(blur.rgb, tint * (0.45 + gray * 0.55), 0.35 * intensity);
-    protected_rgb = lerp(protected_rgb, float3(gray, gray, gray), 0.35);
-    protected_rgb += (grain - 0.5) * 0.22 * intensity;
-    protected_rgb *= 1.0 - 0.20 * saturate(intensity);
-    float blend = saturate(0.82 + amount * 0.16);
-    float3 out_rgb = lerp(color.rgb, protected_rgb, blend);
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    return float4(saturate(out_rgb), out_a);
 }
 
 technique Draw
