@@ -6,12 +6,34 @@
 // Chain order: early in chain; combine with lens-dirt or film-grain after
 
 uniform float4x4 ViewProj;
-uniform float amber_strength = 0.65; // 0.0 – 1.0
-uniform float crush_black    = 0.1;  // 0.0 – 0.3
-uniform float halation       = 0.2;  // 0.0 – 0.5
-
-uniform float2    uv_pixel_interval;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_pixel_interval;
 uniform texture2d image;
+
+uniform float amber_strength <
+    string label = "Amber Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.65;
+
+uniform float crush_black <
+    string label = "Crush Black";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.1;
+
+uniform float halation <
+    string label = "Halation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.2;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -29,7 +51,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
