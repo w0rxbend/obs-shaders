@@ -5,11 +5,40 @@
 // Use case: Desaturates, adds scanlines, timestamp flicker bars, and a REC dot pulse
 // Chain order: Apply last; replaces normal look entirely
 
-uniform float desaturate      = 0.8;  // 0.0 – 1.0
-uniform float scanline_strength = 0.3; // 0.0 – 1.0
-uniform float noise_amount    = 0.06; // 0.0 – 0.2
-uniform float rec_pulse_speed = 1.2;  // 0.5 – 3.0
+uniform float desaturate <
+    string label = "Desaturate";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.8;
+
+uniform float scanline_strength <
+    string label = "Scanline Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+
+uniform float noise_amount <
+    string label = "Noise Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.06;
+
+uniform float rec_pulse_speed <
+    string label = "REC Pulse Speed";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 2.5;
+    float step = 0.01;
+> = 1.2;
+
 uniform float elapsed_time;
+uniform float2 uv_size;
 
 uniform texture2d image;
 
@@ -24,7 +53,6 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-// Simple hash for per-pixel noise.
 float hash21(float2 p)
 {
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
@@ -35,39 +63,34 @@ float4 mainImage(VertData v_in) : TARGET
     float2 uv  = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    // --- Desaturate ---
     float lum = dot(col.rgb, float3(0.299, 0.587, 0.114));
     float3 gray = float3(lum, lum, lum);
-    // Slight green tint for classic CCTV look.
     float3 tinted = lerp(gray, gray * float3(0.85, 1.0, 0.8), 0.3);
     col.rgb = lerp(col.rgb, tinted, desaturate);
 
-    // --- Scanlines ---
-    // One dark line per 2 pixels.
+    // 120 bands across the frame. Strength only darkens the troughs.
     float scanline = 0.5 + 0.5 * sin(uv.y * 3.14159 * 240.0);
     col.rgb *= (1.0 - scanline_strength * (1.0 - scanline));
 
-    // --- Noise ---
     float n = hash21(uv + frac(elapsed_time * 17.3));
     col.rgb += (n - 0.5) * noise_amount * 2.0;
 
-    // --- Horizontal flicker bar at bottom (timestamp area) ---
-    float flicker_phase = frac(elapsed_time * 0.7);
-    float bar_y = 0.92; // top of the timestamp strip
+    float bar_y = 0.92;
     float in_bar = step(bar_y, uv.y);
     float bar_brightness = 0.08 + 0.04 * sin(elapsed_time * 3.0);
     col.rgb = lerp(col.rgb, float3(bar_brightness, bar_brightness * 1.1, bar_brightness * 0.8), in_bar * 0.85);
 
-    // Faux timestamp text zone: slight horizontal band noise.
-    float text_noise = hash21(float2(floor(uv.x * 60.0), floor(uv.y * 120.0)) + elapsed_time);
+    // Hold the faux timestamp cells under 3 Hz.
+    float text_tick = floor(elapsed_time * 2.0);
+    float text_noise = hash21(float2(floor(uv.x * 60.0), floor(uv.y * 120.0)) + text_tick);
     col.rgb += in_bar * (text_noise > 0.92 ? 0.4 : 0.0) * float3(0.7, 1.0, 0.7);
 
-    // --- REC dot indicator (top-left area) ---
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 rec_pos = float2(0.05, 0.05);
-    float  rec_dist = length(uv - rec_pos);
-    float  rec_dot  = 1.0 - smoothstep(0.012, 0.016, rec_dist);
-    // Pulse: on/off blink.
-    float  rec_pulse = step(0.5, 0.5 + 0.5 * sin(elapsed_time * rec_pulse_speed * 6.28318));
+    float2 rec_delta = (uv - rec_pos) * float2(aspect, 1.0);
+    float rec_dist = length(rec_delta);
+    float rec_dot = 1.0 - smoothstep(0.012, 0.016, rec_dist);
+    float rec_pulse = step(0.5, 0.5 + 0.5 * sin(elapsed_time * rec_pulse_speed * 6.28318));
     col.rgb = lerp(col.rgb, float3(1.0, 0.1, 0.1), rec_dot * rec_pulse);
 
     col.rgb = saturate(col.rgb);
