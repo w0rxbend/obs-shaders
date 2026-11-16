@@ -1,11 +1,25 @@
 // C2 — sepia-film
 // Classic sepia tone with animated film grain.
 
-uniform float strength = 0.9; // 0.0 – 1.0
-uniform float grain    = 0.05; // 0.0 – 0.3
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.9;
+
+uniform float grain <
+    string label = "Grain";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.05;
 
 uniform texture2d image;
 uniform float elapsed_time;
+uniform float2 uv_size;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -25,25 +39,23 @@ float Hash21(float2 p)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv  = v_in.uv;
+    float2 uv = v_in.uv;
     float4 col = image.Sample(textureSampler, uv);
 
-    // Luminance
     float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
 
-    // Classic sepia matrix output
     float3 sepia;
-    sepia.r = clamp(luma * 1.07 + 0.07, 0.0, 1.0);
-    sepia.g = clamp(luma * 0.95 - 0.01, 0.0, 1.0);
-    sepia.b = clamp(luma * 0.74 - 0.08, 0.0, 1.0);
+    sepia.r = saturate(luma * 1.07 + 0.07);
+    sepia.g = saturate(luma * 0.95 - 0.01);
+    sepia.b = saturate(luma * 0.74 - 0.08);
 
     float3 result = lerp(col.rgb, sepia, strength);
 
-    // Animated film grain — seed changes every frame via elapsed_time floor
-    float  frameSeed = floor(elapsed_time * 24.0);          // ~24 fps grain refresh
-    float2 grainUv   = uv * float2(1920.0, 1080.0);        // pixel-level noise
-    float  noise     = Hash21(grainUv + float2(frameSeed, frameSeed * 0.37));
-    noise = noise * 2.0 - 1.0;                              // centre at zero
+    // Pixel-square grain. 24 Hz is texture, not a full-frame flash.
+    float frameSeed = floor(elapsed_time * 24.0);
+    float2 grainUv = floor(uv * uv_size);
+    float noise = Hash21(grainUv + float2(frameSeed, frameSeed * 0.37));
+    noise = noise * 2.0 - 1.0;
 
     result = saturate(result + noise * grain);
 
