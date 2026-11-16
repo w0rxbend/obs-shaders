@@ -1,10 +1,32 @@
 // A2 — soft-vignette
 // Darkens edges with a smooth elliptical gradient.
 
-uniform float strength = 0.5;  // 0.0 – 1.0
-uniform float softness = 0.5;  // 0.0 – 1.0
-uniform float aspect   = 1.78; // width/height ratio
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
 
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+// Neutral at 1. Frame aspect comes from uv_size, not a 16:9 constant.
+uniform float aspect <
+    string label = "Horizontal Stretch";
+    string widget_type = "slider";
+    float minimum = 0.5;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float2 uv_size;
 uniform texture2d image;
 
 sampler_state textureSampler {
@@ -24,21 +46,22 @@ float4 mainImage(VertData v_in) : TARGET
     float4 col = image.Sample(textureSampler, uv);
 
     // Center UV, correct for aspect ratio
+    float frame_aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 centered = uv - 0.5;
-    centered.x *= aspect;
+    centered.x *= frame_aspect / max(aspect, 0.001);
 
     // Distance from center in elliptical space
     float dist = length(centered);
 
     // Vignette factor: 0 at center, 1 at edges
     // softness controls the gradient width; clamp to avoid divide-by-zero
-    float soft    = max(softness, 0.001);
-    float inner   = 0.5 - soft * 0.5;
-    float outer   = 0.5 + soft * 0.5;
+    float soft     = max(softness, 0.001);
+    float inner    = 0.5 - soft * 0.5;
+    float outer    = 0.5 + soft * 0.5;
     float vignette = smoothstep(inner, outer, dist);
 
     // Apply darkening
     float darken = 1.0 - vignette * strength;
-    col.rgb *= darken;
+    col.rgb = saturate(col.rgb * darken);
     return col;
 }
