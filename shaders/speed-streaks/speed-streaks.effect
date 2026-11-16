@@ -5,11 +5,33 @@
 // Chain order: mid — before color grading, after base video
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 
-uniform float streak_amount = 0.04; // 0.0–0.1
-uniform float center_x      = 0.5;  // 0.0–1.0
-uniform float center_y      = 0.5;  // 0.0–1.0
+uniform float streak_amount <
+    string label = "Streak Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.1;
+    float step = 0.001;
+> = 0.04;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -26,29 +48,30 @@ VertData VSDefault(VertData v_in)
 {
     VertData v_out;
     v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    v_out.uv  = v_in.uv;
+    v_out.uv  = v_in.uv * uv_scale + uv_offset;
     return v_out;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv     = v_in.uv;
+    float2 uv = v_in.uv;
     float2 center = float2(center_x, center_y);
-    float2 dir    = uv - center;
+    float2 dir = uv - center;
+    float2 base_uv = clamp(uv, 0.0, 1.0);
+    float4 base = image.Sample(textureSampler, base_uv);
 
-    // 8-tap radial accumulation along the outward direction
-    float4 acc = float4(0.0, 0.0, 0.0, 0.0);
-    int SAMPLES = 8;
-    for (int i = 0; i < SAMPLES; i++)
+    // Eight taps from the pixel inward. Scale 1 is the source, so it is not sampled again.
+    float3 sum = base.rgb;
+    for (int i = 1; i < 8; i++)
     {
-        float t        = float(i) / float(SAMPLES - 1); // 0..1
-        float scale    = 1.0 - streak_amount * t;       // zoom in toward center
+        float t = (float)i / max(7.0, 0.001);
+        float scale = 1.0 - streak_amount * t;
         float2 sample_uv = clamp(center + dir * scale, 0.0, 1.0);
-        acc += image.Sample(textureSampler, sample_uv);
+        sum += image.Sample(textureSampler, sample_uv).rgb;
     }
-    acc /= float(SAMPLES);
 
-    return acc;
+    float3 rgb = saturate(sum / max(8.0, 0.001));
+    return float4(rgb, base.a);
 }
 
 technique Draw
