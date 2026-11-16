@@ -1,8 +1,21 @@
 // A6 — temperature-shift
 // Warm/cool color temperature shift with green/magenta tint control.
 
-uniform float temperature = 0.2;  // -1.0 (cool) to 1.0 (warm)
-uniform float tint        = 0.0;  // -1.0 (green) to 1.0 (magenta)
+uniform float temperature <
+    string label = "Temperature (Cool to Warm)";
+    string widget_type = "slider";
+    float minimum = -1.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.2;
+
+uniform float tint <
+    string label = "Tint (Green to Magenta)";
+    string widget_type = "slider";
+    float minimum = -1.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.0;
 
 uniform texture2d image;
 
@@ -38,7 +51,7 @@ float4 mainImage(VertData v_in) : TARGET
     // Preserve luminance to avoid overall brightness shift
     float lumaSrc = dot(col.rgb, float3(0.2126, 0.7152, 0.0722));
     float lumaDst = dot(result,  float3(0.2126, 0.7152, 0.0722));
-    float scale   = (lumaDst > 0.0001) ? (lumaSrc / lumaDst) : 1.0;
+    float scale   = lumaSrc / max(lumaDst, 0.001);
     result       *= scale;
 
     return float4(saturate(result), col.a);
