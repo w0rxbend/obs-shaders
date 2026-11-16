@@ -1,8 +1,8 @@
 // Filename: shader_100_sun_flare_approximation.effect
 // Category: Weather / atmosphere pack
 // Effect: Sun flare approximation
-// Visual principle: procedural atmospheric layers, moving shadows, lens streaks, and brightness pulses.
-// What makes it cool: it adds environmental storytelling without external image textures.
+// Visual principle: aspect-correct sun disk, warm halo, anamorphic streak, and a few lens ghosts.
+// What makes it cool: a live sun flare sits on the picture without a second pass or a dirt texture.
 // Suggested source type: webcam, game capture, video source, image source
 // Suggested shader-chain combinations: this shader -> cinematic grade -> lens dirt
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 0.85;
-uniform float speed = 1.01;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,55 +82,80 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float streak = pow(saturate(1.0 - abs(frac(uv.x * 28.0 + uv.y * 7.0 - t * 1.6) - 0.5) * 20.0), 2.0);
-    float flakes = step(0.985 - amount * 0.006, hash12(floor((uv + float2(0.0, t * 0.05)) * uv_size / 6.0)));
-    float shadow = 0.75 + 0.25 * sin(uv.x * 5.0 + uv.y * 3.0 + t * 0.7);
-    float2 warp = float2(streak * 0.006 * amount, flakes * 0.003) * intensity;
-    float4 src = image.Sample(textureSampler, clamp(uv + warp, 0.0, 1.0));
-    float3 atmosphere = float3(0.950, 0.930, 0.860);
-    float3 out_rgb = src.rgb * lerp(1.0, shadow, 0.20 * intensity);
-    out_rgb = lerp(out_rgb, atmosphere, 0.12 * amount);
-    out_rgb += (streak + flakes) * atmosphere * 0.35 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 sun = float2(center_x, center_y);
+    float2 p = uv - sun;
+    p.x *= aspect;
+    float dist = length(p);
+
+    // One breathe cycle is many seconds at the default speed, so the frame never strobes.
+    float breathe = fmod(elapsed_time * speed * 0.25, 6.28318530718);
+    float pulse = 0.84 + 0.16 * sin(breathe);
+    float boost = intensity * pulse;
+    float spread = saturate(amount * 0.5);
+
+    float halo_span = lerp(0.012, 0.028, spread);
+    float core = exp(-(dist * dist) / max(0.0018, 0.001));
+    float halo = exp(-(dist * dist) / max(halo_span, 0.001));
+    float air = exp(-(dist * dist) / max(0.07, 0.001));
+
+    float streak_reach = lerp(2.4, 0.85, spread);
+    float streak = exp(-(p.y * p.y) / max(0.0016, 0.001)) * exp(-abs(p.x) * streak_reach);
+
+    float spin = fmod(elapsed_time * speed * 0.15, 6.28318530718);
+    float2 dir = float2(cos(spin), sin(spin));
+    float across = p.x * dir.y - p.y * dir.x;
+    float along = abs(dot(p, dir));
+    float ray = exp(-(across * across) / max(0.0014, 0.001)) * exp(-along * lerp(1.8, 0.7, spread));
+
+    float ang = atan2(p.y, p.x);
+    float spikes = pow(abs(sin(ang * 3.0)), 16.0) * exp(-dist * 4.2);
+
+    // Ghosts sit on the line that reflects the sun through the frame center.
+    float2 axis = sun - float2(0.5, 0.5);
+    axis.x *= aspect;
+    float2 q = uv - float2(0.5, 0.5);
+    q.x *= aspect;
+    float ghost1 = exp(-dot(q + axis * 0.48, q + axis * 0.48) / max(0.0032, 0.001));
+    float ghost2 = exp(-dot(q + axis * 1.05, q + axis * 1.05) / max(0.009, 0.001));
+    float ghost3 = exp(-dot(q - axis * 0.62, q - axis * 0.62) / max(0.0024, 0.001));
+    float ring_band = length(q + axis * 0.82) - 0.055;
+    float ring = exp(-(ring_band * ring_band) / max(0.0012, 0.001));
+
+    float3 flare = float3(1.0, 0.97, 0.86) * core * 0.72;
+    flare += float3(1.0, 0.66, 0.24) * halo * 0.20;
+    flare += float3(1.0, 0.78, 0.42) * air * 0.08;
+    flare += float3(1.0, 0.90, 0.58) * streak * 0.18;
+    flare += float3(1.0, 0.84, 0.50) * ray * 0.10;
+    flare += float3(1.0, 0.95, 0.80) * spikes * 0.16;
+    flare += float3(0.45, 0.78, 1.0) * ghost1 * 0.16 * amount;
+    flare += float3(1.0, 0.48, 0.28) * ghost2 * 0.11 * amount;
+    flare += float3(0.62, 1.0, 0.70) * ghost3 * 0.09 * amount;
+    flare += float3(0.88, 0.94, 1.0) * ring * 0.08 * amount;
+    flare *= boost;
+
+    float3 lit = saturate(source.rgb + flare);
+    float3 rgb = lerp(source.rgb, lit, saturate(opacity));
+    return float4(rgb, alphaOut(source.a));
 }
 
 technique Draw
