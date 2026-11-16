@@ -1,8 +1,8 @@
 // Filename: shader_102_neon_kaleido_wash.effect
 // Category: VJ / music video expansion
 // Effect: Neon kaleido wash
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: mirrored wedges around a center, washed with a slow cyan-magenta neon tint.
+// What makes it cool: the frame folds into neon kaleidoscope color while a talking head stays readable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,60 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.00;
-uniform float amount = 1.01;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.00;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.37;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,27 +82,8 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -75,17 +99,44 @@ float alphaOut(float sampled_alpha)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 1.04) + sin(t * 0.37 + 3.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 102.0), cos(t * 0.73 + 3.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 origin = float2(center_x, center_y);
+    float2 from_center = (uv - origin) * float2(aspect, 1.0);
+    float radius = length(from_center);
+
+    float tau = 6.28318530718;
+    float slices = 3.0 + floor(saturate(amount * 0.5) * 5.0);
+    float slice = tau / max(slices, 0.001);
+    float spin = fmod(elapsed_time * speed * 0.15, tau);
+    float ang = atan2(from_center.y, from_center.x) + spin;
+    float sector = fmod(ang, slice);
+    if (sector < 0.0)
+    {
+        sector += slice;
+    }
+    float half_slice = slice * 0.5;
+    float folded_angle = half_slice - abs(sector - half_slice);
+
+    float2 folded = float2(
+        cos(folded_angle) * radius / max(aspect, 0.001),
+        sin(folded_angle) * radius);
+    float2 sample_uv = clamp(origin + folded, 0.0, 1.0);
+    float3 mirrored = image.Sample(textureSampler, sample_uv).rgb;
+
+    float luma = dot(mirrored, float3(0.299, 0.587, 0.114));
+    float hue = 0.5 + 0.5 * sin(folded_angle + spin);
+    float3 neon = lerp(float3(0.0, 0.85, 1.0), float3(1.0, 0.05, 0.75), hue);
+    float neon_amt = saturate(0.55 + 0.25 * (amount - 1.0));
+    float3 tinted = saturate(lerp(mirrored, neon * (0.30 + 0.70 * luma), neon_amt));
+
+    // Center stays close to the source so a talking head still reads at the default.
+    float edge = smoothstep(0.18, 0.70, radius);
+    float wash = saturate((0.22 + 0.78 * edge) * intensity * opacity);
+    float3 rgb = saturate(lerp(source.rgb, tinted, wash));
+    return float4(rgb, alphaOut(source.a));
 }
 
 technique Draw
