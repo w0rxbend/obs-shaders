@@ -6,12 +6,53 @@
 // Chain order: early in chain; pair with chromatic-aberration or vhs-tracking for gritty look
 
 uniform float4x4 ViewProj;
-uniform float desat        = 0.7;  // 0.0 – 1.0
-uniform float blue_grey    = 0.4;  // 0.0 – 1.0
-uniform float shadow_crush = 0.12; // 0.0 – 0.3
-uniform float vignette     = 0.5;  // 0.0 – 1.0
-
 uniform texture2d image;
+
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+uniform float2 uv_size;
+uniform float2 uv_pixel_interval;
+uniform float elapsed_time;
+
+uniform float desat <
+    string label = "Desaturation";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float blue_grey <
+    string label = "Blue Grey";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float shadow_crush <
+    string label = "Shadow Crush";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.3;
+    float step = 0.01;
+> = 0.12;
+
+uniform float vignette <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float rain <
+    string label = "Rain";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.65;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -24,12 +65,11 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-
 VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -38,37 +78,68 @@ float luma(float3 c)
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
+float hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float rainLayer(float2 uv, float time_s, float columns, float seed)
+{
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float pixel_x = max(uv_pixel_interval.x, 0.0002);
+    float slanted_x = uv.x * aspect + (uv.y - 0.5) * 0.16;
+    float column = floor(slanted_x * columns);
+    float vary = hash21(float2(column + seed, seed));
+    float gate = step(0.62, vary);
+    float across = abs(frac(slanted_x * columns) - 0.5) / max(columns, 0.001);
+    float half_width = pixel_x * max(aspect, 0.001) * (0.85 + vary * 0.55);
+    float strand = 1.0 - smoothstep(half_width, half_width * 2.8, across);
+    float cells = 2.2 + vary * 2.6;
+    float along = frac(uv.y * cells - time_s * (1.15 + vary * 1.25) + vary * 19.0);
+    float head = 1.0 - smoothstep(0.0, 0.06, along);
+    float tail = 1.0 - smoothstep(0.03, 0.36, along);
+    return gate * strand * (head * 0.75 + tail * 0.34);
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
-    float4 col = image.Sample(textureSampler, v_in.uv);
-    float3 c   = col.rgb;
+    float2 uv = saturate(v_in.uv);
+    float4 col = image.Sample(textureSampler, uv);
+    float3 c = col.rgb;
 
-    // Desaturate
     float lum = luma(c);
     float3 grey = float3(lum, lum, lum);
     c = lerp(c, grey, desat);
 
-    // Shadow crush — pulls darks toward pure black
-    // Values below crush_black get pulled down aggressively
     float crushFactor = shadow_crush;
     c = max(c - crushFactor, float3(0.0, 0.0, 0.0));
-    // Re-normalize above crush floor
-    c = c / (1.0 - crushFactor + 0.001);
+    c = c / max(1.0 - crushFactor, 0.001);
 
-    // Blue-grey push in midtones and shadows
-    float midMask = smoothstep(0.0, 0.7, luma(c)) * (1.0 - smoothstep(0.6, 1.0, luma(c)));
-    float shadowMask = 1.0 - smoothstep(0.0, 0.5, luma(c));
+    float tone = luma(c);
+    float midMask = smoothstep(0.0, 0.7, tone) * (1.0 - smoothstep(0.6, 1.0, tone));
+    float shadowMask = 1.0 - smoothstep(0.0, 0.5, tone);
     c.b += blue_grey * 0.18 * (midMask + shadowMask * 0.6);
-    c.g += blue_grey * 0.06 * midMask; // slight green-grey in midtones
+    c.g += blue_grey * 0.06 * midMask;
     c.r -= blue_grey * 0.10 * (midMask + shadowMask * 0.4);
 
-    // Heavy vignette — cinematic tunnel effect
-    float2 centered = v_in.uv - float2(0.5, 0.5);
-    float vd = dot(centered, centered) * 3.0;
+    // Circular in pixels. Corner darkness matches the old square-UV falloff.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 centered = uv - float2(0.5, 0.5);
+    centered.x *= aspect;
+    float corner = 0.25 * (aspect * aspect + 1.0);
+    float vd = dot(centered, centered) / max(corner, 0.001) * 1.5;
     float vig = 1.0 - clamp(vd * vignette * 1.2, 0.0, 0.95);
     c *= vig;
 
-    c = clamp(c, 0.0, 1.0);
+    // Wrap the clock so a long stream does not lose streak phase.
+    float clock = elapsed_time - floor(elapsed_time / max(90.0, 0.001)) * 90.0;
+    float coarse = rainLayer(uv, clock * 0.85, 40.0, 2.0);
+    float fine = rainLayer(uv, clock * 1.15, 86.0, 9.0);
+    float streaks = saturate(coarse + fine * 0.65);
+    c *= 1.0 - streaks * rain * 0.10;
+    c += float3(0.74, 0.80, 0.90) * streaks * rain * 0.18;
+
+    c = saturate(c);
     return float4(c, col.a);
 }
 
