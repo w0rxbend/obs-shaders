@@ -1,9 +1,23 @@
 // A1 — rounded-corners
 // Masks corners with a smooth rounded rectangle, outputting transparency.
 
-uniform float radius    = 0.1;  // 0.0 – 0.5
-uniform float smoothness = 0.01; // 0.0 – 0.05
+uniform float radius <
+    string label = "Radius";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.1;
 
+uniform float smoothness <
+    string label = "Smoothness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.01;
+
+uniform float2 uv_size;
 uniform texture2d image;
 
 sampler_state textureSampler {
@@ -17,24 +31,29 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
-// Signed distance to a rounded rectangle centered at 0.5,0.5
-// p  : uv in [0,1]
-// r  : corner radius in UV space (square aspect)
-float sdRoundedRect(float2 p, float r)
+// Height-normalized space keeps the corner radius circular on widescreen.
+float sdRoundedRect(float2 p, float2 half_extent, float r)
 {
-    float2 q = abs(p - 0.5) - (0.5 - r);
-    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    float2 q = abs(p) - (half_extent - r);
+    return length(max(q, float2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv   = v_in.uv;
-    float4 col  = image.Sample(textureSampler, uv);
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
 
-    float dist  = sdRoundedRect(uv, radius);
-    // dist < 0 = inside, dist > 0 = outside
-    float alpha = 1.0 - smoothstep(-smoothness, smoothness, dist);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    if (aspect < 0.001)
+        aspect = 1.0;
 
-    col.a *= alpha;
+    float2 half_extent = 0.5 * float2(aspect, 1.0);
+    float2 p = (uv - 0.5) * float2(aspect, 1.0);
+    float corner = min(max(radius, 0.0), min(half_extent.x, half_extent.y));
+    float edge = max(smoothness, 0.001);
+    float dist = sdRoundedRect(p, half_extent, corner);
+    float mask = 1.0 - smoothstep(-edge, edge, dist);
+
+    col.a *= mask;
     return col;
 }
