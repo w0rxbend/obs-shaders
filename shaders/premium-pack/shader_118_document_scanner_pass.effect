@@ -1,8 +1,8 @@
 // Filename: shader_118_document_scanner_pass.effect
 // Category: Screen capture utility expansion
 // Effect: Document scanner pass
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: flatbed photocopy tone, a short CCD smear, feeder lines, and a slow scanner lamp.
+// What makes it cool: a live source reads as a document scan while the person stays recognizable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,61 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.09;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.73;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +83,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,13 +99,6 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
@@ -75,17 +112,48 @@ float alphaOut(float sampled_alpha)
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 1.04) + sin(t * 0.37 + 1.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 118.0), cos(t * 0.73 + 8.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float smear = max(amount, 0.0);
+    float2 px = float2(max(uv_pixel_interval.x, 0.0) * smear, 0.0);
+    float3 left_rgb = image.Sample(textureSampler, clamp(uv - px, 0.0, 1.0)).rgb;
+    float3 right_rgb = image.Sample(textureSampler, clamp(uv + px, 0.0, 1.0)).rgb;
+    float3 smeared = (source.rgb + left_rgb + right_rgb) * 0.3333333;
+
+    float contrast = 1.0 + 0.38 * intensity;
+    float tone = saturate((luma3(smeared) - 0.48) * contrast + 0.50);
+    float3 scanned = lerp(float3(0.10, 0.11, 0.12), float3(0.94, 0.95, 0.93), tone);
+
+    float row = uv.y * max(uv_size.y, 1.0);
+    float feeder = 0.5 + 0.5 * sin(row * 0.62);
+    scanned *= lerp(0.955, 1.0, feeder);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 bed_uv = (uv - float2(center_x, center_y)) * float2(aspect, 1.0);
+    float bed = smoothstep(0.35, 1.25, length(bed_uv));
+    scanned = lerp(scanned, scanned * 0.82, bed * 0.40);
+
+    // Default speed 1.73 moves the lamp at 0.38 Hz, under a 3 Hz full-frame flash.
+    float rate = min(max(speed, 0.0) * 0.22, 2.0);
+    float sweep = frac(elapsed_time * rate + (center_y - 0.5));
+    float half_width = max(0.010 + 0.004 * amount, 0.001);
+    float lamp = 1.0 - smoothstep(0.0, half_width, abs(uv.y - sweep));
+    float aim = 1.0 - smoothstep(0.0, 0.85, abs(uv.x - center_x));
+    float behind = sweep - uv.y;
+    float trail_span = max(0.07, 0.001);
+    float trail = (1.0 - saturate(behind / trail_span)) * step(0.0, behind) * (1.0 - lamp);
+    scanned += float3(0.70, 0.74, 0.76) * lamp * aim * 0.22 * intensity;
+    scanned += float3(0.22, 0.23, 0.21) * trail * aim * 0.20 * intensity;
+
+    float2 grain_px = floor(uv * max(uv_size, float2(1.0, 1.0)));
+    scanned += (hash12(grain_px) - 0.5) * 0.028 * intensity;
+
+    float scan_mix = saturate(0.55 + 0.12 * intensity);
+    float3 graded = lerp(smeared, scanned, scan_mix);
+    float cover = saturate(amount * 0.80);
+    float3 out_rgb = lerp(source.rgb, graded, cover);
+    return float4(saturate(out_rgb), alphaOut(source.a));
 }
 
 technique Draw
