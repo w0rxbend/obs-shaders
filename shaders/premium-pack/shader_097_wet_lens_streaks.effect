@@ -1,7 +1,7 @@
 // Filename: shader_097_wet_lens_streaks.effect
 // Category: Weather / atmosphere pack
 // Effect: Wet lens streaks
-// Visual principle: procedural atmospheric layers, moving shadows, lens streaks, and brightness pulses.
+// Visual principle: gravity-drawn water beads and thin trails refract the image; the face between streaks stays clear.
 // What makes it cool: it adds environmental storytelling without external image textures.
 // Suggested source type: webcam, game capture, video source, image source
 // Suggested shader-chain combinations: this shader -> cinematic grade -> lens dirt
@@ -11,17 +11,54 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.01;
-uniform float speed = 1.73;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.01;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.73;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +76,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -50,44 +87,58 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        return 1.0;
     }
-    return a * saturate(opacity);
+    return sampled_alpha;
+}
+
+// water, signed bend, glint. Period 6 lands on a cell boundary so the wrap does not pop.
+float3 wetColumn(float x, float y, float column_x, float seed)
+{
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float width = max(0.004 + 0.005 * amount, 0.001);
+    float gate = saturate(1.02 - 0.36 * amount);
+    float slide = fmod(elapsed_time * speed * 0.035, 6.0);
+    float y_field = y - slide + (center_y - 0.5);
+    float cell = floor(y_field * 6.0);
+    float bead_y = (cell + 0.82) / 6.0;
+    float dx = (x - column_x) / width;
+    float dy = (y_field - bead_y) / max(width * aspect, 0.001);
+    float bead = exp(-(dx * dx + dy * dy));
+    float rise = saturate((bead_y - y_field) / 0.12);
+    float tail = exp(-dx * dx * 1.8) * rise * rise;
+    float on = step(gate, hash12(float2(column_x * 19.0 + seed, cell)));
+    float water = on * max(bead, tail * 0.55);
+    float bend = on * dx * exp(-dx * dx) * max(bead, tail * 0.35);
+    float glint = on * bead * bead;
+    return float3(water, bend, glint);
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float streak = pow(saturate(1.0 - abs(frac(uv.x * 28.0 + uv.y * 7.0 - t * 1.6) - 0.5) * 20.0), 2.0);
-    float flakes = step(0.985 - amount * 0.006, hash12(floor((uv + float2(0.0, t * 0.05)) * uv_size / 6.0)));
-    float shadow = 0.75 + 0.25 * sin(uv.x * 5.0 + uv.y * 3.0 + t * 0.7);
-    float2 warp = float2(streak * 0.006 * amount, flakes * 0.003) * intensity;
-    float4 src = image.Sample(textureSampler, clamp(uv + warp, 0.0, 1.0));
-    float3 atmosphere = float3(0.950, 0.930, 0.860);
-    float3 out_rgb = src.rgb * lerp(1.0, shadow, 0.20 * intensity);
-    out_rgb = lerp(out_rgb, atmosphere, 0.12 * amount);
-    out_rgb += (streak + flakes) * atmosphere * 0.35 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+    float4 source = image.Sample(textureSampler, clamp(uv, 0.0, 1.0));
+
+    float3 wet = wetColumn(uv.x, uv.y, center_x - 0.28, 1.7);
+    wet += wetColumn(uv.x, uv.y, center_x - 0.10, 4.1);
+    wet += wetColumn(uv.x, uv.y, center_x + 0.12, 8.3);
+    wet += wetColumn(uv.x, uv.y, center_x + 0.30, 13.9);
+
+    float water = saturate(wet.x);
+    float2 shift = float2(wet.y * 0.006 * intensity, water * 0.003 * intensity);
+    float2 sample_uv = clamp(uv + shift, 0.0, 1.0);
+    float4 refracted = image.Sample(textureSampler, sample_uv);
+
+    float3 tint = lerp(refracted.rgb, refracted.rgb * float3(0.84, 0.90, 0.97), water * 0.45);
+    tint += float3(0.90, 0.95, 1.0) * saturate(wet.z) * 0.16 * intensity;
+    float cover = water * saturate(opacity);
+    float3 rgb = lerp(source.rgb, saturate(tint), cover);
+    return float4(rgb, alphaOut(source.a));
 }
 
 technique Draw
