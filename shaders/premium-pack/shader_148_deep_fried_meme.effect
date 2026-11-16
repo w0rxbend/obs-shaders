@@ -1,8 +1,8 @@
 // Filename: shader_148_deep_fried_meme.effect
 // Category: Extreme / transition expansion
 // Effect: Deep fried meme
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: hot saturation, edge halos, posterized bands, JPEG-like blocks, and grain.
+// What makes it cool: a talking head stays readable while the frame looks deep-fried.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -11,17 +11,55 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
 uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.15;
-uniform float amount = 1.09;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.15;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 0.83;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +77,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -55,13 +93,6 @@ float luma3(float3 c)
     return dot(c, float3(0.299, 0.587, 0.114));
 }
 
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
@@ -70,22 +101,58 @@ float alphaOut(float sampled_alpha)
     {
         a = 1.0;
     }
-    return a * saturate(opacity);
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
     float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.70) + sin(t * 0.37 + 4.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 148.0), cos(t * 0.73 + 5.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float zoom = 1.0 + 0.04 * max(intensity, 0.0);
+    float2 fried_uv = center + (uv - center) / max(zoom, 0.001);
+
+    float2 px = max(abs(uv_pixel_interval), float2(0.001, 0.001));
+    float block_px = max(6.0, 14.0 - 4.0 * max(amount, 0.0));
+    float2 block_uv_size = max(px * block_px, float2(0.001, 0.001));
+    float2 snapped = floor(fried_uv / block_uv_size) * block_uv_size + block_uv_size * 0.5;
+    float mosaic = saturate(0.35 * max(amount, 0.0));
+    float2 sample_uv = clamp(lerp(clamp(fried_uv, 0.0, 1.0), clamp(snapped, 0.0, 1.0), mosaic), 0.0, 1.0);
+
+    float3 center_rgb = image.Sample(textureSampler, sample_uv).rgb;
+    float3 north = image.Sample(textureSampler, clamp(sample_uv + float2(0.0, px.y), 0.0, 1.0)).rgb;
+    float3 south = image.Sample(textureSampler, clamp(sample_uv - float2(0.0, px.y), 0.0, 1.0)).rgb;
+    float3 east = image.Sample(textureSampler, clamp(sample_uv + float2(px.x, 0.0), 0.0, 1.0)).rgb;
+    float3 west = image.Sample(textureSampler, clamp(sample_uv - float2(px.x, 0.0), 0.0, 1.0)).rgb;
+    float3 blur = (north + south + east + west) * 0.25;
+    float3 sharpened = center_rgb + (center_rgb - blur) * (0.85 * max(intensity, 0.0));
+
+    float luma = luma3(sharpened);
+    float3 neutral = float3(luma, luma, luma);
+    float3 saturated = lerp(neutral, sharpened, 1.0 + 0.95 * max(amount, 0.0));
+    float contrast = 1.0 + 0.35 * max(intensity, 0.0);
+    float3 contrasted = (saturated - 0.5) * contrast + 0.5;
+    float levels = max(8.0, 18.0 - 5.0 * max(amount, 0.0));
+    float3 banded = floor(saturate(contrasted) * levels + 0.5) / max(levels, 0.001);
+
+    float highlight = smoothstep(0.62, 0.95, luma3(banded));
+    float3 warm = float3(1.15, 0.92, 0.62);
+    float3 fried = banded * lerp(float3(1.0, 1.0, 1.0), warm, highlight * saturate(intensity));
+
+    // Grain steps at 2 * speed. Default 0.83 stays under two changes per second.
+    float grain_tick = floor(fmod(max(elapsed_time, 0.0) * max(speed, 0.0), 512.0) * 2.0);
+    float grain = hash12(floor(uv / px) + float2(grain_tick, 3.0)) - 0.5;
+    fried += grain * 0.05 * max(amount, 0.0);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = (uv - center) * float2(aspect, 1.0);
+    float corner = max(0.5 * length(float2(aspect, 1.0)), 0.001);
+    float edge = length(from_center) / corner;
+    float vig = 1.0 - clamp((edge - 0.75) * 0.45, 0.0, 0.22) * saturate(intensity);
+    fried *= vig;
+
+    float3 shown = lerp(source.rgb, saturate(fried), saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
