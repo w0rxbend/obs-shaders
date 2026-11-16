@@ -1,8 +1,8 @@
 // Filename: shader_113_dashboard_glass_dim.effect
 // Category: Screen capture utility expansion
 // Effect: Dashboard glass dim
-// Visual principle: animated UV camera transforms around a stable center point.
-// What makes it cool: it makes a static source feel physically alive without moving the OBS source transform.
+// Visual principle: a wide cool glass pane dims and lightly frosts the picture, edged by a thin rim and a slow sheen.
+// What makes it cool: dashboard glass lowers a bright capture while a talking head stays in place and recognizable.
 // Suggested source type: webcam camera source, image source, video source
 // Suggested shader-chain combinations: this shader -> soft drop shadow -> color grade
 // Performance cost: low
@@ -13,15 +13,58 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 1.09;
-uniform float speed = 0.83;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.09;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 0.83;
+
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
+
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,53 +82,66 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
-}
-
-float hash12(float2 p)
-{
-    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
 {
-    float a = sampled_alpha;
+    float alpha = sampled_alpha;
     [branch]
     if (!preserve_alpha)
     {
-        a = 1.0;
+        alpha = 1.0;
     }
-    return a * saturate(opacity);
+    return alpha;
 }
 
 float4 mainImage(VertData v_in) : TARGET
 {
-    float2 uv = v_in.uv;
-    float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
+    float2 uv = clamp(v_in.uv, 0.0, 1.0);
+    float4 source = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float strength = saturate(intensity * 0.5);
+    float reach = saturate(amount * 0.5);
+    float half_w = lerp(0.46, 0.40, reach);
+    float half_h = lerp(0.44, 0.38, reach);
     float2 center = float2(center_x, center_y);
-    float angle = (sin(t * 0.87) + sin(t * 0.37 + 5.0) * 0.45) * 0.018 * amount * intensity;
-    float2 drift = float2(sin(t * 0.91 + 113.0), cos(t * 0.73 + 3.0)) * 0.018 * amount * intensity;
-    float zoom = 1.04 + abs(angle) * 1.4 + length(drift) * 2.0;
-    float2 p = (uv - center) / zoom;
-    float2 warped_uv = center + rotate2d(p, angle) - drift;
-    float4 warped = image.Sample(textureSampler, clamp(warped_uv, float2(0.0, 0.0), float2(1.0, 1.0)));
-    return float4(warped.rgb, alphaOut(color.a));
+    float2 from_center = uv - center;
+    float2 delta = abs(from_center) - float2(half_w, half_h);
+    float2 delta_h = float2(delta.x * aspect, delta.y);
+    float signed_distance = length(max(delta_h, float2(0.0, 0.0))) + min(max(delta_h.x, delta_h.y), 0.0);
+    float inside = 1.0 - smoothstep(0.0, 0.02, signed_distance);
+    float rim = 1.0 - smoothstep(0.0, 0.012, abs(signed_distance));
+
+    float2 texel = float2(1.0 / max(uv_size.x, 1.0), 1.0 / max(uv_size.y, 1.0));
+    float frost_px = lerp(1.5, 4.5, reach);
+    float2 frost_step = texel * frost_px;
+    float3 blurred = source.rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(frost_step.x, 0.0), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv - float2(frost_step.x, 0.0), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv + float2(0.0, frost_step.y), 0.0, 1.0)).rgb;
+    blurred += image.Sample(textureSampler, clamp(uv - float2(0.0, frost_step.y), 0.0, 1.0)).rgb;
+    blurred *= 0.2;
+
+    float dim = lerp(1.0, 0.58, saturate(intensity * 0.50));
+    float3 cooled = blurred * float3(0.90, 0.96, 1.04);
+    float3 pane = lerp(blurred, cooled, saturate(intensity * 0.40)) * dim;
+
+    // 0.045 UV/s at speed 1. Default 0.83 takes about 27 seconds to cross, under the 3 Hz flash cap.
+    float sheen_travel = elapsed_time * max(speed, 0.0) * 0.045;
+    float along = from_center.x * 0.72 + from_center.y * 0.38;
+    float sheen_band = exp(-abs(frac((along - sheen_travel) / max(1.4, 0.001)) - 0.35) * 14.0);
+    pane += float3(0.85, 0.92, 1.0) * sheen_band * inside * reach * 0.10;
+
+    float surround_dim = lerp(1.0, 0.88, saturate(intensity * 0.50));
+    float3 framed = lerp(source.rgb * surround_dim, pane, inside);
+    framed = lerp(framed, float3(0.80, 0.88, 0.96), rim * strength * 0.40);
+    framed = saturate(framed);
+
+    float3 shown = lerp(source.rgb, framed, saturate(opacity));
+    return float4(shown, alphaOut(source.a));
 }
 
 technique Draw
