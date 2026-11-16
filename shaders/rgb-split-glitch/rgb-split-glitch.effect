@@ -5,9 +5,27 @@
 // glitch_speed    : how fast the random offset changes (0.0–10.0, default 5.0)
 // glitch_frequency: fraction of time the glitch is active (0.0–1.0, default 0.3)
 
-uniform float strength         = 0.015;
-uniform float glitch_speed     = 5.0;
-uniform float glitch_frequency = 0.3;
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.015;
+uniform float glitch_speed <
+    string label = "Glitch Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 10.0;
+    float step = 0.1;
+> = 5.0;
+uniform float glitch_frequency <
+    string label = "Glitch Frequency";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
 
 uniform float elapsed_time;
 uniform texture2d image;
@@ -68,5 +86,5 @@ float4 mainImage(VertData v_in) : TARGET
     float b = image.Sample(textureSampler, float2(uvB, uv.y)).b;
     float a = image.Sample(textureSampler, uv).a;
 
-    return float4(r, g, b, a);
+    return float4(saturate(r), saturate(g), saturate(b), a);
 }
