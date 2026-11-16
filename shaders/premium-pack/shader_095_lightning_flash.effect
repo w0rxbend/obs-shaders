@@ -1,7 +1,7 @@
 // Filename: shader_095_lightning_flash.effect
 // Category: Weather / atmosphere pack
 // Effect: Lightning flash
-// Visual principle: procedural atmospheric layers, moving shadows, lens streaks, and brightness pulses.
+// Visual principle: short cool-white strikes and a jagged bolt; the face stays visible between flashes.
 // What makes it cool: it adds environmental storytelling without external image textures.
 // Suggested source type: webcam, game capture, video source, image source
 // Suggested shader-chain combinations: this shader -> cinematic grade -> lens dirt
@@ -11,17 +11,54 @@
 // OBS Shaderfilter compatibility notes: HLSL-like .effect syntax, mainImage entry point, image.Sample(textureSampler, uv), no GLSL/Shadertoy-only uniforms.
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
 uniform float elapsed_time;
-uniform float2 uv_pixel_interval;
 uniform float2 uv_size;
 
-uniform float intensity = 1.30;
-uniform float amount = 0.85;
-uniform float speed = 1.37;
-uniform float center_x = 0.5;
-uniform float center_y = 0.5;
-uniform float opacity = 1.0;
+uniform float intensity <
+    string label = "Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.30;
+uniform float amount <
+    string label = "Amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.85;
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.37;
+uniform float center_x <
+    string label = "Center X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float center_y <
+    string label = "Center Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+uniform float opacity <
+    string label = "Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 1.0;
 uniform bool preserve_alpha = true;
 
 sampler_state textureSampler {
@@ -39,7 +76,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv = v_in.uv;
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -48,18 +85,6 @@ float hash12(float2 p)
     float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
-}
-
-float luma3(float3 c)
-{
-    return dot(c, float3(0.299, 0.587, 0.114));
-}
-
-float2 rotate2d(float2 p, float a)
-{
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
 float alphaOut(float sampled_alpha)
@@ -77,17 +102,45 @@ float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
-    float t = elapsed_time * speed;
-    float streak = pow(saturate(1.0 - abs(frac(uv.x * 28.0 + uv.y * 7.0 - t * 1.6) - 0.5) * 20.0), 2.0);
-    float flakes = step(0.985 - amount * 0.006, hash12(floor((uv + float2(0.0, t * 0.05)) * uv_size / 6.0)));
-    float shadow = 0.75 + 0.25 * sin(uv.x * 5.0 + uv.y * 3.0 + t * 0.7);
-    float2 warp = float2(streak * 0.006 * amount, flakes * 0.003) * intensity;
-    float4 src = image.Sample(textureSampler, clamp(uv + warp, 0.0, 1.0));
-    float3 atmosphere = float3(0.650, 0.550, 0.350);
-    float3 out_rgb = src.rgb * lerp(1.0, shadow, 0.20 * intensity);
-    out_rgb = lerp(out_rgb, atmosphere, 0.12 * amount);
-    out_rgb += (streak + flakes) * atmosphere * 0.35 * intensity;
-    return float4(saturate(out_rgb), alphaOut(color.a));
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    // speed 1.37 opens a slot about every 1.7s. Peaks are 90ms, so the default stays under one strike a second.
+    float slot_hz = speed * 0.42;
+    float strike_clock = fmod(elapsed_time * slot_hz, 4096.0);
+    float slot = floor(strike_clock);
+    float age = frac(strike_clock) / max(slot_hz, 0.001);
+    float strike_gate = step(0.28, hash12(float2(slot, 3.1))) * step(0.001, speed);
+    float primary = pow(saturate(1.0 - age / max(0.09, 0.001)), 2.0);
+    float echo_age = age - 0.14;
+    float echo = pow(saturate(1.0 - echo_age / max(0.07, 0.001)), 2.0);
+    float echo_gate = step(0.72, hash12(float2(slot, 9.2))) * step(0.0, echo_age) * step(echo_age, 0.07);
+    float flash = strike_gate * saturate(primary + echo_gate * echo * 0.65);
+
+    float row = floor(uv.y * 24.0);
+    float row_frac = saturate(uv.y * 24.0 - row);
+    float jag = lerp(
+        hash12(float2(row, slot + 1.0)) - 0.5,
+        hash12(float2(row + 1.0, slot + 1.0)) - 0.5,
+        row_frac) * 0.18 * amount;
+    float bolt_anchor = center_x + (hash12(float2(slot, 4.4)) - 0.5) * 0.62;
+    float dist = abs((uv.x - bolt_anchor) * aspect - jag);
+    float bolt_width = 0.01 + 0.02 * amount;
+    float core = saturate(1.0 - dist / max(bolt_width, 0.001));
+    float glow = saturate(1.0 - dist / max(bolt_width * 5.0, 0.001));
+    float branch_anchor = bolt_anchor + (hash12(float2(slot, 6.6)) - 0.5) * 0.12;
+    float branch_dist = abs((uv.x - branch_anchor) * aspect - (hash12(float2(row, slot + 8.0)) - 0.5) * 0.10 * amount);
+    float branch = saturate(1.0 - branch_dist / max(bolt_width * 0.55, 0.001));
+    branch = branch * branch * step(uv.y, center_y + 0.05);
+    float near_center = saturate(1.15 - abs(uv.y - center_y));
+    float bolt_mask = saturate(core * core + glow * 0.28 + branch * 0.7) * near_center * flash;
+
+    float3 src = color.rgb;
+    float3 rgb = src * (1.0 - 0.06 * saturate(amount));
+    rgb += src * flash * 0.35 * intensity;
+    rgb += float3(0.75, 0.86, 1.0) * flash * 0.12 * intensity;
+    rgb += float3(0.90, 0.96, 1.0) * bolt_mask * intensity;
+    rgb = lerp(rgb, rgb * float3(0.90, 0.95, 1.06), 0.10 * saturate(amount));
+    return float4(saturate(rgb), alphaOut(color.a));
 }
 
 technique Draw
