@@ -11,11 +11,33 @@
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
-uniform float    elapsed_time;
+uniform float elapsed_time;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 
-uniform float bpm             = 128.0; // 60.0–200.0  — beats per minute
-uniform float hue_cycle_speed = 2.0;   // 0.0–5.0     — hue rotation speed multiplier
-uniform float flash_intensity = 0.5;   // 0.0–1.0     — white/black flash strength
+uniform float bpm <
+    string label = "BPM";
+    string widget_type = "slider";
+    float minimum = 60.0;
+    float maximum = 200.0;
+    float step = 1.0;
+> = 128.0;
+
+uniform float hue_cycle_speed <
+    string label = "Hue Cycle Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 5.0;
+    float step = 0.01;
+> = 2.0;
+
+uniform float flash_intensity <
+    string label = "Flash Intensity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -32,7 +54,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -44,7 +66,7 @@ float3 rgb2hsv(float3 c)
     float4 q = (c.r < p.x) ? float4(p.xyw, c.r) : float4(c.r, p.yzx);
     float d  = q.x - min(q.w, q.y);
     float e  = 1.0e-10;
-    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+    return float3(abs(q.z + (q.w - q.y) / max(6.0 * d + e, 0.001)), d / max(q.x + e, 0.001), q.x);
 }
 
 // HSV to RGB
@@ -64,9 +86,8 @@ float4 mainImage(VertData v_in) : TARGET
     float4 src = image.Sample(textureSampler, uv);
 
     // Beat calculation: beats per second -> phase 0..1
-    float bps   = bpm / 60.0;
-    float beat  = frac(elapsed_time * bps);      // 0..1 within current beat
-    float beat2 = frac(elapsed_time * bps * 0.5); // half-time
+    float bps  = bpm / 60.0;
+    float beat = frac(elapsed_time * bps);
 
     // Hue rotation: spin continuously at hue_cycle_speed beats/rotation
     float hueShift = elapsed_time * bps * hue_cycle_speed * (1.0 / 6.0);
@@ -78,8 +99,8 @@ float4 mainImage(VertData v_in) : TARGET
 
     // Strobe flash: white on beat hit, quick decay
     // Flash shape: sharp attack, exponential decay over beat
-    float flashT = saturate(1.0 - beat * 8.0);     // hits on beat 0, decays over 1/8 beat
-    flashT = flashT * flashT;                        // quadratic curve for snap feel
+    float flashT = saturate(1.0 - beat * 8.0);
+    flashT = flashT * flashT;
 
     // Alternate flash between white and colour-inverted
     float flashSign = (frac(elapsed_time * bps * 0.5) < 0.5) ? 1.0 : -1.0;
