@@ -6,13 +6,42 @@
 // Chain order: apply after base correction; pairs well with crt-scanlines or blur
 
 uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
 uniform texture2d image;
-uniform float2   uv_pixel_interval;
+uniform float2 uv_pixel_interval;
 
-uniform float pink_shift  = 0.4;  // 0.0–1.0
-uniform float cyan_shift  = 0.3;  // 0.0–1.0
-uniform float scanlines   = 0.2;  // 0.0–1.0
-uniform float chroma      = 0.006; // 0.0–0.015
+uniform float pink_shift <
+    string label = "Pink Shift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float cyan_shift <
+    string label = "Cyan Shift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+
+uniform float scanlines <
+    string label = "Scanlines";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.2;
+
+uniform float chroma <
+    string label = "Chroma";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.015;
+    float step = 0.001;
+> = 0.006;
 
 sampler_state textureSampler {
     Filter   = Linear;
@@ -29,7 +58,7 @@ VertData VSDefault(VertData v_in)
 {
     VertData vert_out;
     vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
-    vert_out.uv  = v_in.uv;
+    vert_out.uv  = v_in.uv * uv_scale + uv_offset;
     return vert_out;
 }
 
@@ -86,7 +115,7 @@ float4 mainImage(VertData v_in) : TARGET
     col = saturate(col + bloomPink * bloomMask * 0.3);
 
     // Scanlines: thin horizontal lines
-    float scanFreq = 1.0 / uv_pixel_interval.y; // line count = pixel rows
+    float scanFreq = 1.0 / max(uv_pixel_interval.y, 0.001);
     float scanLine  = sin(uv.y * scanFreq * 3.14159) * 0.5 + 0.5;
     scanLine        = pow(scanLine, 3.0);
     col *= lerp(1.0, scanLine, scanlines * 0.6);
