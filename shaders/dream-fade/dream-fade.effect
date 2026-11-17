@@ -1,0 +1,82 @@
+// dream-fade
+// Slow soft fade toward a pastel wash. Default never reaches black or white.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.75;
+    float step = 0.01;
+> = 0.35;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.4;
+    float step = 0.01;
+> = 0.08;
+
+uniform float warmth <
+    string label = "Warmth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.45;
+
+uniform texture2d image;
+uniform float elapsed_time;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // One slow breath. Max 0.4 Hz stays under 3 full-frame pulses per second.
+    float breath = sin(elapsed_time * speed * 6.283185);
+    float fade = strength * (0.62 + 0.38 * breath);
+
+    float3 cool = float3(0.73, 0.82, 0.93);
+    float3 warm = float3(0.95, 0.80, 0.84);
+    float3 pastel = lerp(cool, warm, warmth);
+
+    float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    float3 wash = pastel * (0.62 + luma * 0.48);
+    float3 result = lerp(col.rgb, wash, saturate(fade));
+    result = saturate(result);
+
+    return float4(result, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

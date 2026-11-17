@@ -1,0 +1,123 @@
+// crt-curved-mask
+// Mild CRT barrel, scanlines, and a dark rounded bezel. Defaults keep a talking head readable.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float barrel <
+    string label = "Barrel";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.07;
+
+uniform float scan_strength <
+    string label = "Scanlines";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.18;
+
+uniform float corner_radius <
+    string label = "Corner radius";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.45;
+    float step = 0.01;
+> = 0.12;
+
+uniform float corner_dark <
+    string label = "Corner dark";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.9;
+    float step = 0.01;
+> = 0.65;
+
+uniform texture2d image;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float FrameAspect()
+{
+    return uv_size.x / max(uv_size.y, 1.0);
+}
+
+float2 BarrelUv(float2 uv, float amount)
+{
+    float aspect = FrameAspect();
+    float2 centered = uv - 0.5;
+    centered.x *= aspect;
+    float radius2 = dot(centered, centered);
+    centered = centered * (1.0 + amount * radius2);
+    centered.x /= max(aspect, 0.001);
+    return centered + 0.5;
+}
+
+float ScanlineGain(float y, float strength)
+{
+    // Two source rows per cycle. Static, so the picture does not flash.
+    float freq = max(uv_size.y, 1.0) / max(2.0, 0.001);
+    float gap = abs(frac(y * freq) - 0.5);
+    float band = smoothstep(0.0, 0.15, gap);
+    return lerp(1.0, band, strength);
+}
+
+float RoundedBezel(float2 uv, float radius)
+{
+    float aspect = FrameAspect();
+    float2 half_extent = 0.5 * float2(aspect, 1.0);
+    float2 centered = (uv - 0.5) * float2(aspect, 1.0);
+    float corner = min(max(radius, 0.0), min(half_extent.x, half_extent.y));
+    float2 inset = abs(centered) - (half_extent - corner);
+    float edge_dist = length(max(inset, float2(0.0, 0.0))) + min(max(inset.x, inset.y), 0.0) - corner;
+    return 1.0 - smoothstep(-0.012, 0.0, edge_dist);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float2 curved = BarrelUv(uv, barrel);
+    float4 source = image.Sample(textureSampler, curved);
+
+    float2 span = min(curved, float2(1.0, 1.0) - curved);
+    float2 pixel_size = max(uv_size, float2(1.0, 1.0));
+    float on_tube = saturate(min(span.x * pixel_size.x, span.y * pixel_size.y));
+
+    float scan_gain = ScanlineGain(curved.y, scan_strength);
+    float bezel = RoundedBezel(uv, corner_radius);
+    float shade = lerp(1.0 - corner_dark, 1.0, bezel) * on_tube;
+    float3 graded = saturate(source.rgb * scan_gain * shade);
+
+    return float4(graded, source.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

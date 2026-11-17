@@ -1,0 +1,108 @@
+// fractal-tunnel
+// Mild center pinch with a few slow concentric rings. The face stays put.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float warp <
+    string label = "Warp";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.08;
+
+uniform float rings <
+    string label = "Rings";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 6.0;
+    float step = 0.1;
+> = 3.0;
+
+uniform float ring_strength <
+    string label = "Ring Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.07;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.12;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 delta = uv - float2(0.5, 0.5);
+    float2 delta_screen = float2(delta.x * aspect, delta.y);
+    float radius = length(delta_screen);
+    float2 dir_screen = delta_screen / max(radius, 0.001);
+    float2 dir_uv = float2(dir_screen.x / max(aspect, 0.001), dir_screen.y);
+
+    // Speed 1 is one cycle per second. Wrap so a long stream does not feed sin a huge value.
+    float travel = fmod(elapsed_time * speed, 1.0);
+
+    float band = 0.0;
+    float weight = 0.0;
+    float freq = rings;
+    float amp = 1.0;
+    for (int octave = 0; octave < 3; octave++) {
+        float cycle = frac(radius * freq + travel);
+        band += sin(cycle * 6.28318530718) * amp;
+        weight += amp;
+        freq *= 2.0;
+        amp *= 0.5;
+    }
+    band /= max(weight, 0.001);
+
+    // Quadratic pinch is near zero on the face and only bends the corners.
+    float pinch = warp * radius * radius;
+    float groove = band * ring_strength * radius;
+    float displace = pinch + groove * 0.12;
+    float2 uv_warp = clamp(uv - dir_uv * displace, 0.0, 1.0);
+
+    float4 col = image.Sample(textureSampler, uv_warp);
+    float shade = 1.0 + band * ring_strength;
+    float3 rgb = saturate(col.rgb * shade);
+    return float4(rgb, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

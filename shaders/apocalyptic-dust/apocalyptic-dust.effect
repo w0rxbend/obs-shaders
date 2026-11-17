@@ -1,0 +1,144 @@
+// apocalyptic-dust
+// Slow ash banks and grit in front of the frame. A talking head stays readable.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.78;
+
+uniform float dust <
+    string label = "Dust";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float grit <
+    string label = "Grit";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.35;
+    float step = 0.01;
+> = 0.09;
+
+uniform float warmth <
+    string label = "Warmth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float drift <
+    string label = "Drift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.34;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float ValueNoise(float2 p)
+{
+    float2 cell = floor(p);
+    float2 blend = frac(p);
+    float2 curve = blend * blend * (3.0 - 2.0 * blend);
+    float a = Hash21(cell);
+    float b = Hash21(cell + float2(1.0, 0.0));
+    float c = Hash21(cell + float2(0.0, 1.0));
+    float d = Hash21(cell + float2(1.0, 1.0));
+    return lerp(lerp(a, b, curve.x), lerp(c, d, curve.x), curve.y);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float t = elapsed_time * drift;
+    float2 plane = float2(uv.x * aspect, uv.y);
+
+    float bank = ValueNoise(plane * 0.85 + float2(t * 0.05, t * 0.018));
+    float sheetA = ValueNoise(plane * 1.7 + float2(t * 0.11, t * 0.035));
+    float wind = ValueNoise(float2(plane.x * 0.75 + t * 0.16, plane.y * 2.8 - t * 0.02));
+    float sheet = saturate(bank * 0.46 + sheetA * 0.32 + wind * 0.22);
+
+    float2 wobble = float2(sheetA - 0.5, wind - 0.5) * 0.0014 * strength;
+    float4 src = image.Sample(textureSampler, uv + wobble);
+
+    float luma = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float3 ash = float3(
+        saturate(luma * 1.02 + 0.04),
+        saturate(luma * 0.95 + 0.03),
+        saturate(luma * 0.76 + 0.02)
+    );
+    float3 graded = lerp(src.rgb, ash, warmth * strength * 0.75);
+
+    float2 fromFace = uv - float2(0.5, 0.42);
+    float radial = length(float2(fromFace.x * aspect, fromFace.y));
+    float edge = smoothstep(0.22, 1.05, radial);
+    float body = lerp(0.62, 1.0, edge);
+    float banks = lerp(0.72, 1.15, sheet);
+    float settle = lerp(0.9, 1.12, saturate(uv.y));
+    // About 0.04 Hz. A slow density breath, not a frame flash.
+    float breath = 0.93 + 0.07 * sin(elapsed_time * 0.28);
+    float cover = saturate(dust * strength * body * banks * settle * breath);
+
+    float3 haze = saturate(graded * 0.62 + float3(0.30, 0.25, 0.18));
+    float3 veiled = lerp(graded, haze, cover);
+
+    float grain = ValueNoise(plane * 70.0 + float2(t * 9.0, t * 3.0));
+    float speck = smoothstep(0.82, 0.97, ValueNoise(plane * 36.0 + float2(t * 4.0, -t * 1.4)));
+    float nick = smoothstep(0.82, 0.97, ValueNoise(plane * 28.0 + float2(-t * 3.2, t * 1.1)));
+    float mote = smoothstep(0.76, 0.96, ValueNoise(plane * 5.5 + float2(t * 0.8, -t * 0.28)));
+
+    veiled = veiled + (grain * 2.0 - 1.0) * grit * strength * 0.55;
+    veiled = veiled + speck * float3(0.55, 0.48, 0.36) * grit * strength;
+    veiled = veiled - nick * grit * strength * 0.85;
+    veiled = lerp(veiled, float3(0.70, 0.62, 0.46), mote * saturate(grit * 5.0) * strength * 0.65);
+
+    return float4(saturate(veiled), src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

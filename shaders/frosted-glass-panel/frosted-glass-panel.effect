@@ -1,0 +1,165 @@
+// Frosted glass panel
+// One rounded rectangle is milky and soft. Outside it, the source stays sharp.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float panel_x <
+    string label = "Panel X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.82;
+
+uniform float panel_y <
+    string label = "Panel Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.58;
+
+uniform float panel_width <
+    string label = "Panel Width";
+    string widget_type = "slider";
+    float minimum = 0.02;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.28;
+
+uniform float panel_height <
+    string label = "Panel Height";
+    string widget_type = "slider";
+    float minimum = 0.02;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.40;
+
+uniform float corner_radius <
+    string label = "Corner Radius";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.25;
+    float step = 0.001;
+> = 0.03;
+
+uniform float edge_soft <
+    string label = "Edge Softness";
+    string widget_type = "slider";
+    float minimum = 0.001;
+    float maximum = 0.08;
+    float step = 0.001;
+> = 0.012;
+
+uniform float frost_amount <
+    string label = "Frost";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.75;
+
+uniform float blur_px <
+    string label = "Blur";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 32.0;
+    float step = 0.1;
+> = 12.0;
+
+uniform float milk_veil <
+    string label = "Milk Veil";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.5;
+    float step = 0.01;
+> = 0.16;
+
+uniform float rim_strength <
+    string label = "Rim";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform texture2d image;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+// Height-normalized space keeps the corner radius circular on widescreen.
+float sdRoundedRect(float2 p, float2 half_extent, float rad)
+{
+    float2 q = abs(p) - (half_extent - float2(rad, rad));
+    return length(max(q, float2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - rad;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 clear_col = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 local_p = (uv - float2(panel_x, panel_y)) * float2(max(aspect, 0.001), 1.0);
+    float2 half_extent = float2(panel_width * max(aspect, 0.001) * 0.5, panel_height * 0.5);
+    float rad_limit = min(half_extent.x, half_extent.y);
+    float rad = min(max(corner_radius, 0.0), max(rad_limit, 0.0));
+    float edge = max(edge_soft, 0.001);
+    float dist = sdRoundedRect(local_p, half_extent, rad);
+    float inside = 1.0 - smoothstep(-edge, edge, dist);
+
+    float2 texel = float2(1.0 / max(uv_size.x, 1.0), 1.0 / max(uv_size.y, 1.0));
+    float reach = max(blur_px, 0.0);
+    float2 ax = float2(texel.x * reach, 0.0);
+    float2 ay = float2(0.0, texel.y * reach);
+
+    float3 acc = clear_col.rgb;
+    acc += image.Sample(textureSampler, uv + ax).rgb;
+    acc += image.Sample(textureSampler, uv - ax).rgb;
+    acc += image.Sample(textureSampler, uv + ay).rgb;
+    acc += image.Sample(textureSampler, uv - ay).rgb;
+    acc += image.Sample(textureSampler, uv + ax + ay).rgb;
+    acc += image.Sample(textureSampler, uv + ax - ay).rgb;
+    acc += image.Sample(textureSampler, uv - ax + ay).rgb;
+    acc += image.Sample(textureSampler, uv - ax - ay).rgb;
+    float3 blurred = acc / max(9.0, 0.001);
+
+    float rim_band = 1.0 - smoothstep(0.0, max(edge * 3.0, 0.001), abs(dist));
+    float3 milk = float3(0.90, 0.94, 0.98);
+    float3 glass = lerp(blurred, milk, saturate(milk_veil));
+    glass = lerp(glass, float3(1.0, 1.0, 1.0), saturate(rim_strength) * rim_band * inside);
+    glass = saturate(glass);
+
+    float cover = saturate(inside * frost_amount);
+    float3 result = saturate(lerp(clear_col.rgb, glass, cover));
+    return float4(result, clear_col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

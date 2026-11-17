@@ -1,0 +1,115 @@
+// Nightmare contrast: deep shadows and hot highlights. Mids stay nearer the source.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.88;
+
+uniform float contrast <
+    string label = "Contrast";
+    string widget_type = "slider";
+    float minimum = 1.0;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.8;
+
+uniform float shadow_depth <
+    string label = "Shadow Depth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.62;
+
+uniform float highlight_heat <
+    string label = "Highlight Heat";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.35;
+
+uniform texture2d image;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float ContrastCurve(float channel, float curve)
+{
+    float x = saturate(channel);
+    float exponent = max(curve, 0.001);
+    if (x < 0.5)
+    {
+        return 0.5 * pow(max(x * 2.0, 0.0), exponent);
+    }
+    return 1.0 - 0.5 * pow(max((1.0 - x) * 2.0, 0.0), exponent);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+    float3 rgb = col.rgb;
+
+    float3 curved;
+    curved.r = ContrastCurve(rgb.r, contrast);
+    curved.g = ContrastCurve(rgb.g, contrast);
+    curved.b = ContrastCurve(rgb.b, contrast);
+
+    float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    float shadowWeight = 1.0 - smoothstep(0.0, 0.30, luma);
+    float crush = lerp(1.0, 0.38, shadow_depth);
+    curved = curved * lerp(1.0, crush, shadowWeight);
+
+    float curvedLuma = dot(curved, float3(0.2126, 0.7152, 0.0722));
+    float3 coolShadow = float3(curvedLuma * 0.78, curvedLuma * 0.84, curvedLuma);
+    curved = lerp(curved, coolShadow, shadowWeight * shadow_depth);
+
+    float highlightWeight = smoothstep(0.74, 1.0, luma);
+    float heat = highlight_heat * highlightWeight * 0.28;
+    float3 hotHighlight = float3(
+        saturate(curved.r + heat),
+        saturate(curved.g + heat * 0.7),
+        saturate(curved.b + heat * 0.35)
+    );
+    curved = lerp(curved, hotHighlight, highlightWeight);
+
+    // Skin-range luma stays nearer the camera so the face does not crush.
+    float faceWeight = smoothstep(0.20, 0.38, luma) * (1.0 - smoothstep(0.68, 0.86, luma));
+    float3 readable = lerp(curved, rgb, faceWeight * 0.42);
+    float3 shown = lerp(rgb, readable, saturate(strength));
+
+    return float4(saturate(shown), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

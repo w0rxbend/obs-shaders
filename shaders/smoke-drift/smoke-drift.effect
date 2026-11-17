@@ -1,0 +1,125 @@
+// smoke-drift
+// Layered wisps drift upward and lightly veil the source.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float veil <
+    string label = "Veil";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.48;
+
+uniform float drift <
+    string label = "Drift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.75;
+
+uniform float wisp_scale <
+    string label = "Scale";
+    string widget_type = "slider";
+    float minimum = 0.4;
+    float maximum = 3.0;
+    float step = 0.01;
+> = 1.5;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float ValueNoise(float2 p)
+{
+    float2 cell = floor(p);
+    float2 cellFrac = frac(p);
+    float2 fade = cellFrac * cellFrac * (3.0 - 2.0 * cellFrac);
+    float n00 = Hash21(cell);
+    float n10 = Hash21(cell + float2(1.0, 0.0));
+    float n01 = Hash21(cell + float2(0.0, 1.0));
+    float n11 = Hash21(cell + float2(1.0, 1.0));
+    float alongX0 = lerp(n00, n10, fade.x);
+    float alongX1 = lerp(n01, n11, fade.x);
+    return lerp(alongX0, alongX1, fade.y);
+}
+
+float OctaveWisp(float2 p, float octaveId, float time, float driftSpeed)
+{
+    float freq = 1.7 + octaveId * 1.45;
+    float rise = (0.06 + octaveId * 0.04) * driftSpeed;
+    float sway = (0.025 + octaveId * 0.015) * driftSpeed;
+    float2 q = p;
+    q.x = q.x * (1.2 + octaveId * 0.28) + octaveId * 3.1;
+    q.y = q.y * (0.48 + octaveId * 0.08);
+    // UV y grows downward, so adding time scrolls the field up the frame.
+    q.y = q.y + time * rise;
+    q.x = q.x + sin(q.y * 1.6 + time * sway + octaveId) * 0.11;
+    float ridge = 1.0 - abs(ValueNoise(q * freq) * 2.0 - 1.0);
+    ridge = saturate(ridge);
+    return ridge * ridge;
+}
+
+float LayeredWisps(float2 p, float time, float driftSpeed)
+{
+    float wispSum = 0.0;
+    float weightSum = 0.0;
+    for (int octave = 0; octave < 3; octave = octave + 1)
+    {
+        float octaveId = float(octave);
+        float weight = 0.58 - octaveId * 0.14;
+        wispSum = wispSum + OctaveWisp(p, octaveId, time, driftSpeed) * weight;
+        weightSum = weightSum + weight;
+    }
+    return wispSum / max(weightSum, 0.001);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 sourceColor = image.Sample(textureSampler, uv);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 fieldUv = float2(uv.x * aspect, uv.y) * wisp_scale;
+    float smoke = LayeredWisps(fieldUv, elapsed_time, drift);
+    float shaped = saturate((smoke - 0.28) * 2.22);
+    float cover = saturate(shaped * veil);
+    float3 smokeTint = float3(0.78, 0.82, 0.85);
+    float3 veiledRgb = saturate(lerp(sourceColor.rgb, smokeTint, cover));
+    return float4(veiledRgb, sourceColor.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

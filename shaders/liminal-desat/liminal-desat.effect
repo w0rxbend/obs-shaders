@@ -1,0 +1,83 @@
+// Drained color, slight green-gray, soft vignette. Subject stays readable.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float drain <
+    string label = "Drain";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.78;
+
+uniform float green_gray <
+    string label = "Green gray";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.42;
+
+uniform float vignette <
+    string label = "Vignette";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform texture2d image;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    float3 neutral = float3(luma, luma, luma);
+    float3 drained = lerp(col.rgb, neutral, drain);
+
+    float3 bias = lerp(float3(1.0, 1.0, 1.0), float3(0.78, 0.96, 0.76), green_gray);
+    float3 graded = drained * bias;
+
+    // Height-normalized so the falloff stays circular on a widescreen camera.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_mid = uv - float2(0.5, 0.5);
+    float radius = length(float2(from_mid.x * aspect, from_mid.y));
+    float edge = smoothstep(0.50, 1.20, radius);
+    float shade = lerp(1.0, 1.0 - edge * 0.72, vignette);
+    graded = saturate(graded * shade);
+
+    return float4(graded, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

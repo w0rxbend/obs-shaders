@@ -1,0 +1,90 @@
+// deja-vu-echo
+// Faint delayed echo a few pixels off the live picture. The subject stays put.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float echo_pixels <
+    string label = "Echo Pixels";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 16.0;
+    float step = 0.5;
+> = 6.0;
+
+uniform float echo_opacity <
+    string label = "Echo Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.4;
+    float step = 0.01;
+> = 0.14;
+
+uniform float echo_delay <
+    string label = "Echo Delay";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 0.45;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 base = image.Sample(textureSampler, uv);
+
+    float2 texel = float2(
+        1.0 / max(uv_size.x, 0.001),
+        1.0 / max(uv_size.y, 0.001)
+    );
+    float2 dir = float2(1.0, 0.45);
+    dir = dir / max(length(dir), 0.001);
+
+    // shortcut: no prior frame, so delay only lags this echo's offset, upgrade when a previous-frame texture exists
+    float3 live_rgb = base.rgb;
+    for (int copy_i = 1; copy_i <= 2; copy_i++)
+    {
+        float copy_n = float(copy_i);
+        float lag = elapsed_time * 0.5 - echo_delay * copy_n;
+        float breathe = 0.82 + 0.18 * sin(lag);
+        float2 shift = dir * texel * echo_pixels * copy_n * breathe;
+        float4 echo_px = image.Sample(textureSampler, uv + shift);
+        float blend = echo_opacity / max(copy_n, 0.001);
+        live_rgb = lerp(live_rgb, echo_px.rgb, blend);
+    }
+
+    return float4(saturate(live_rgb), base.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

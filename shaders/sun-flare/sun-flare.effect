@@ -1,0 +1,136 @@
+// sun-flare
+// Sun disk, warm halo, anamorphic streak, and lens ghosts. The source stays visible.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float sun_x <
+    string label = "Sun X";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.82;
+
+uniform float sun_y <
+    string label = "Sun Y";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.16;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 0.65;
+
+uniform float streak <
+    string label = "Streak";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 0.7;
+
+uniform float ghosts <
+    string label = "Ghosts";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.5;
+    float step = 0.01;
+> = 0.8;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float2 AspectDelta(float2 point, float2 origin, float aspect)
+{
+    float2 delta = point - origin;
+    delta.x *= aspect;
+    return delta;
+}
+
+float3 GhostRgb(float2 uv, float2 sunUv, float aspect)
+{
+    // Opposite the sun through frame center, where a lens stacks its ghosts.
+    float3 ghostRgb = float3(0.0, 0.0, 0.0);
+    float2 pixelFromCenter = AspectDelta(uv, float2(0.5, 0.5), aspect);
+    float2 sunFromCenter = AspectDelta(sunUv, float2(0.5, 0.5), aspect);
+
+    for (int ghostIndex = 0; ghostIndex < 4; ghostIndex++)
+    {
+        float ghostAlong = 0.55 + float(ghostIndex) * 0.38;
+        float2 ghostOffset = pixelFromCenter + sunFromCenter * ghostAlong;
+        float ghostSpan = 0.0035 + float(ghostIndex) * 0.0022;
+        float ghostMask = exp(-dot(ghostOffset, ghostOffset) / max(ghostSpan, 0.001));
+        float coolPick = float(ghostIndex) - floor(float(ghostIndex) * 0.5) * 2.0;
+        float3 warmTint = float3(1.0, 0.46, 0.20);
+        float3 coolTint = float3(0.42, 0.66, 1.0);
+        float3 tint = lerp(warmTint, coolTint, coolPick);
+        float ghostWeight = 0.62 - float(ghostIndex) * 0.12;
+        ghostRgb += tint * ghostMask * ghostWeight;
+    }
+
+    return ghostRgb;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 source = image.Sample(textureSampler, uv);
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 sunUv = float2(sun_x, sun_y);
+    float2 delta = AspectDelta(uv, sunUv, aspect);
+    float dist = length(delta);
+
+    // A full cycle is about twelve seconds, and only the flare scales.
+    float pulse = 0.92 + 0.08 * sin(elapsed_time * 0.5);
+
+    float disk = 1.0 - smoothstep(0.012, 0.046, dist);
+    float halo = exp(-(dist * dist) / max(0.04, 0.001));
+    float streakMask = exp(-(delta.y * delta.y) / max(0.0018, 0.001));
+    streakMask *= exp(-abs(delta.x) * 1.2);
+    float3 ghostRgb = GhostRgb(uv, sunUv, aspect);
+
+    float3 flare = float3(1.0, 0.97, 0.84) * disk;
+    flare += float3(1.0, 0.55, 0.16) * halo * 0.7;
+    flare += float3(1.0, 0.76, 0.36) * streakMask * streak;
+    flare += ghostRgb * ghosts;
+
+    float3 graded = saturate(source.rgb + flare * strength * pulse);
+    return float4(graded, source.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

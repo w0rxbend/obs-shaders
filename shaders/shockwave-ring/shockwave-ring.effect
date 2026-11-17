@@ -1,0 +1,89 @@
+// One ring expands from the center and refracts on the crest.
+// Elsewhere the source stays put.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform float ring_width <
+    string label = "Ring Width";
+    string widget_type = "slider";
+    float minimum = 0.01;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.05;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 center = float2(0.5, 0.5);
+    float2 from_center = uv - center;
+    from_center.x *= aspect;
+
+    float radius = length(from_center);
+    // frac keeps one ring on a long stream. A raw clock would leave the frame and stay gone.
+    float repeat_seconds = 2.0;
+    float lap = frac(elapsed_time * speed / max(repeat_seconds, 0.001));
+    // 1.45 clears a wide frame, then the picture is still until the next lap.
+    float ring_radius = lap * 1.45;
+    float crest = saturate(1.0 - abs(radius - ring_radius) / max(ring_width, 0.001));
+    crest = crest * crest;
+
+    float2 radial = from_center / max(radius, 0.001);
+    float push = crest * 0.028 * strength;
+    float2 shifted = from_center + radial * push;
+    shifted.x /= max(aspect, 0.001);
+
+    float2 warped_uv = saturate(center + shifted);
+    float4 warped = image.Sample(textureSampler, warped_uv);
+    return float4(saturate(warped.rgb), warped.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

@@ -1,0 +1,88 @@
+// time-loop-echo
+// A few faint trailing copies. The live subject stays unshifted.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float echo_pixels <
+    string label = "Echo Pixels";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 24.0;
+    float step = 0.5;
+> = 5.0;
+
+uniform float echo_opacity <
+    string label = "Echo Opacity";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.35;
+    float step = 0.01;
+> = 0.16;
+
+uniform float loop_speed <
+    string label = "Loop Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.2;
+    float step = 0.01;
+> = 0.3;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 base = image.Sample(textureSampler, uv);
+
+    // shortcut: no prior-frame texture, so the trail is a spatial offset, upgrade when OBS exposes the previous frame
+    float2 texel = float2(
+        1.0 / max(uv_size.x, 0.001),
+        1.0 / max(uv_size.y, 0.001)
+    );
+    float angle = elapsed_time * loop_speed;
+    float2 trail = float2(cos(angle), sin(angle));
+    float3 live_rgb = base.rgb;
+
+    for (int echo_i = 1; echo_i <= 3; echo_i++)
+    {
+        float echo_n = float(echo_i);
+        float2 shift = trail * texel * echo_pixels * echo_n;
+        float4 echo_px = image.Sample(textureSampler, uv - shift);
+        float blend = echo_opacity / max(echo_n, 0.001);
+        live_rgb = lerp(live_rgb, echo_px.rgb, blend);
+    }
+
+    return float4(saturate(live_rgb), base.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

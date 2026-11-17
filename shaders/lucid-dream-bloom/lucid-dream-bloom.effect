@@ -1,0 +1,122 @@
+// Lucid dream bloom
+// Highlight bloom plus a pastel lift. The center tap stays the readable face.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float bloom <
+    string label = "Bloom";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.35;
+
+uniform float radius <
+    string label = "Radius";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 12.0;
+    float step = 0.1;
+> = 5.0;
+
+uniform float threshold <
+    string label = "Threshold";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.62;
+
+uniform float pastel <
+    string label = "Pastel";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float Luma(float3 rgb)
+{
+    return dot(rgb, float3(0.299, 0.587, 0.114));
+}
+
+float3 PastelLift(float3 rgb, float lift)
+{
+    float lum = Luma(rgb);
+    float3 gray = float3(lum, lum, lum);
+    float3 desat = lerp(rgb, gray, lift * 0.28);
+    float3 pale = float3(0.94, 0.89, 0.97);
+    return saturate(lerp(desat, pale, lift * 0.22));
+}
+
+float3 SoftKernel(float2 uv, float3 centerRgb, float2 stepUv)
+{
+    float3 blurred = centerRgb * 4.0;
+    float weight = 4.0;
+
+    blurred += image.Sample(textureSampler, uv + float2(stepUv.x, 0.0)).rgb * 2.0;
+    blurred += image.Sample(textureSampler, uv + float2(-stepUv.x, 0.0)).rgb * 2.0;
+    blurred += image.Sample(textureSampler, uv + float2(0.0, stepUv.y)).rgb * 2.0;
+    blurred += image.Sample(textureSampler, uv + float2(0.0, -stepUv.y)).rgb * 2.0;
+    weight += 8.0;
+
+    // Diagonal ring is twice the cardinal radius, so the glow stays round.
+    float2 wide = stepUv * 1.4142135;
+    blurred += image.Sample(textureSampler, uv + float2(wide.x, wide.y)).rgb;
+    blurred += image.Sample(textureSampler, uv + float2(-wide.x, wide.y)).rgb;
+    blurred += image.Sample(textureSampler, uv + float2(wide.x, -wide.y)).rgb;
+    blurred += image.Sample(textureSampler, uv + float2(-wide.x, -wide.y)).rgb;
+    weight += 4.0;
+
+    return blurred / max(weight, 0.001);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float2 texel = float2(1.0 / max(uv_size.x, 1.0), 1.0 / max(uv_size.y, 1.0));
+    // ~0.14 Hz radius breathe. Not a full-frame flash.
+    float breathe = 0.94 + 0.06 * sin(elapsed_time * 0.9);
+    float2 stepUv = texel * radius * breathe;
+    float4 center = image.Sample(textureSampler, uv);
+    float3 blurred = SoftKernel(uv, center.rgb, stepUv);
+    float kneeEnd = max(min(threshold + 0.2, 1.0), threshold + 0.001);
+    float glowMask = smoothstep(threshold, kneeEnd, Luma(blurred));
+    float3 graded = PastelLift(center.rgb, pastel);
+    float3 bloomed = saturate(graded + blurred * glowMask * bloom);
+    return float4(bloomed, center.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

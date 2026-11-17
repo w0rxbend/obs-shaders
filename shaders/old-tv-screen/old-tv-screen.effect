@@ -1,0 +1,147 @@
+// old-tv-screen
+// Scanlines, a slight barrel, soft chroma bleed, and a rounded dark bezel.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float barrel <
+    string label = "Barrel";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.2;
+    float step = 0.01;
+> = 0.06;
+
+uniform float scanlines <
+    string label = "Scanlines";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.45;
+    float step = 0.01;
+> = 0.18;
+
+uniform float bleed <
+    string label = "Chroma Bleed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.02;
+    float step = 0.001;
+> = 0.003;
+
+uniform float bezel <
+    string label = "Bezel";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.35;
+    float step = 0.01;
+> = 0.12;
+
+uniform texture2d image;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float FrameAspect()
+{
+    return uv_size.x / max(uv_size.y, 1.0);
+}
+
+float2 BarrelUv(float2 uv, float amount)
+{
+    float aspect = FrameAspect();
+    float2 centered = (uv - 0.5) * float2(aspect, 1.0);
+    float radius2 = dot(centered, centered);
+    centered *= 1.0 + amount * radius2;
+    centered.x /= max(aspect, 0.001);
+    return centered + 0.5;
+}
+
+float3 ChromaBleed(float2 uv, float offset, float4 center)
+{
+    float2 shift = float2(offset, 0.0);
+    float4 red_near = image.Sample(textureSampler, uv - shift * 0.45);
+    float4 red_far = image.Sample(textureSampler, uv - shift);
+    float4 blue_near = image.Sample(textureSampler, uv + shift * 0.45);
+    float4 blue_far = image.Sample(textureSampler, uv + shift);
+    float3 smeared;
+    smeared.r = center.r * 0.5 + red_near.r * 0.3 + red_far.r * 0.2;
+    smeared.g = center.g * 0.78 + red_near.g * 0.11 + blue_near.g * 0.11;
+    smeared.b = center.b * 0.5 + blue_near.b * 0.3 + blue_far.b * 0.2;
+    return smeared;
+}
+
+float ScanlineGain(float y, float strength)
+{
+    // Static grooves. A time-based full-frame pulse would strobe the face.
+    float rows = max(uv_size.y, 1.0) * 0.5;
+    float phase = frac(y * rows);
+    float groove = smoothstep(0.4, 0.75, phase);
+    return lerp(1.0, 1.0 - groove, strength);
+}
+
+float GlassMask(float2 uv, float bezel_amount)
+{
+    float aspect = FrameAspect();
+    float2 full_half = float2(aspect, 1.0) * 0.5;
+    float cap = min(full_half.x, full_half.y);
+    float margin = min(bezel_amount * 0.35, cap * 0.4);
+    float2 half_extent = full_half - float2(margin, margin);
+    float corner = min(bezel_amount * 0.9, min(half_extent.x, half_extent.y));
+    float2 centered = (uv - 0.5) * float2(aspect, 1.0);
+    float2 inset = abs(centered) - (half_extent - float2(corner, corner));
+    float edge_dist = length(max(inset, float2(0.0, 0.0)));
+    edge_dist += min(max(inset.x, inset.y), 0.0) - corner;
+    float feather = max(0.02, 0.001);
+    float glass = 1.0 - smoothstep(-feather, feather * 0.2, edge_dist);
+    float shown = saturate(bezel_amount / max(0.02, 0.001));
+    return lerp(1.0, glass, shown);
+}
+
+float OnTube(float2 uv)
+{
+    // +1 keeps the closed 0..1 edge lit. Only texels past the tube go dark.
+    float2 span = min(uv, float2(1.0, 1.0) - uv);
+    float2 pixel = max(uv_size, float2(1.0, 1.0));
+    float inside_px = min(span.x * pixel.x, span.y * pixel.y);
+    return saturate(inside_px + 1.0);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float2 curved = BarrelUv(uv, barrel);
+    float4 center = image.Sample(textureSampler, curved);
+    float3 smeared = ChromaBleed(curved, bleed, center);
+    float glass = GlassMask(uv, bezel) * OnTube(curved);
+    float dark_bezel = 0.07;
+    float3 graded = smeared * ScanlineGain(curved.y, scanlines);
+    graded = lerp(graded * dark_bezel, graded, glass);
+    return float4(saturate(graded), center.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

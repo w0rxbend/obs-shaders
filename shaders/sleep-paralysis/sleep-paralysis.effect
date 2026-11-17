@@ -1,0 +1,105 @@
+// sleep-paralysis
+// Center stays readable. The border crawls and sinks into a cold shadow.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.75;
+
+uniform float crawl <
+    string label = "Crawl";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.06;
+    float step = 0.001;
+> = 0.015;
+
+uniform float shadow <
+    string label = "Cold Shadow";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.62;
+
+uniform float border_width <
+    string label = "Border Width";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.4;
+    float step = 0.01;
+> = 0.16;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+
+    float2 edge_span = min(uv, 1.0 - uv);
+    edge_span.x = edge_span.x * aspect;
+    float rim = min(edge_span.x, edge_span.y);
+
+    // Wrap so a long stream keeps the crawl phase. Motion stays on the rim.
+    float clock = fmod(elapsed_time, 1024.0);
+    float creep = sin(uv.y * 9.0 + clock * 0.8) * cos(uv.x * 7.0 - clock * 0.55);
+    float crept_width = border_width * (1.0 + creep * 0.12 * strength);
+    float rim_mix = 1.0 - smoothstep(0.0, max(crept_width, 0.001), rim);
+
+    float along = sin(uv.y * 12.0 + clock * 0.7);
+    float across = cos(uv.x * 10.0 - clock * 0.55);
+    float2 drift = float2(along, across * 0.75 + 0.28);
+    drift.x = drift.x / max(aspect, 0.001);
+    float2 crawled_uv = saturate(uv + drift * crawl * rim_mix * strength);
+
+    float4 col = image.Sample(textureSampler, crawled_uv);
+
+    float tendril = sin(uv.x * 16.0 - uv.y * 6.0 - clock * 1.1);
+    tendril = tendril * 0.5 + 0.5;
+    float shade = saturate(rim_mix * shadow * lerp(0.75, 1.0, tendril));
+
+    float luma = dot(col.rgb, float3(0.299, 0.587, 0.114));
+    float3 cold = float3(luma * 0.08, luma * 0.14, luma * 0.26);
+    float3 sunk = lerp(col.rgb, cold, shade);
+    float3 shown = lerp(col.rgb, saturate(sunk), strength);
+
+    return float4(saturate(shown), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

@@ -1,0 +1,229 @@
+// broken-glass
+// Impact cracks from the center, a small per-shard shift, and a thin bright rim.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float crack_amount <
+    string label = "Crack amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float refraction <
+    string label = "Refraction";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.03;
+    float step = 0.001;
+> = 0.008;
+
+uniform float rim_gain <
+    string label = "Rim";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform texture2d image;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+// DirFromUnit and PointUnit share this origin so a wedge seam sits on its ray.
+static const float kPi = 3.14159265;
+static const float kTau = 6.2831853;
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float PseudoAngle(float2 p)
+{
+    float ax = abs(p.x);
+    float ay = abs(p.y);
+    float denom = max(max(ax, ay), 0.001);
+    float a = min(ax, ay) / denom;
+    float s = a * a;
+    float angle = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
+    if (ay > ax)
+    {
+        angle = 1.57079637 - angle;
+    }
+    if (p.x < 0.0)
+    {
+        angle = kPi - angle;
+    }
+    if (p.y < 0.0)
+    {
+        angle = -angle;
+    }
+    return angle;
+}
+
+float SegmentGap(float2 point, float2 start, float2 tip)
+{
+    float2 span = tip - start;
+    float along = dot(point - start, span) / max(dot(span, span), 0.001);
+    float t = saturate(along);
+    return length(point - (start + span * t));
+}
+
+float2 DirFromUnit(float unit)
+{
+    float ang = unit * kTau - kPi;
+    return float2(cos(ang), sin(ang));
+}
+
+float PointUnit(float2 point)
+{
+    return frac((PseudoAngle(point) + kPi) / max(kTau, 0.001));
+}
+
+float RayUnit(float seed)
+{
+    return Hash21(float2(seed, 1.7));
+}
+
+float RayLength()
+{
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    return length(float2(aspect * 0.5, 0.5)) + 0.08;
+}
+
+float BranchGap(float2 point, float2 dir, float unit, float salt)
+{
+    float branchUnit = frac(unit + (Hash21(float2(unit, salt)) - 0.5) * 0.22);
+    float2 branchDir = DirFromUnit(branchUnit);
+    float branchLen = 0.04 + Hash21(float2(unit, salt + 1.1)) * 0.1;
+    float startT = 0.16 + Hash21(float2(unit, salt + 2.3)) * 0.55;
+    float2 start = dir * (RayLength() * startT);
+    return SegmentGap(point, start, start + branchDir * branchLen);
+}
+
+float RadialGap(float2 point, float unit)
+{
+    float2 dir = DirFromUnit(unit);
+    float gap = SegmentGap(point, float2(0.0, 0.0), dir * RayLength());
+    gap = min(gap, BranchGap(point, dir, unit, 8.1));
+    gap = min(gap, BranchGap(point, dir, unit, 6.4));
+    return gap;
+}
+
+float RingGap(float2 point, float seed)
+{
+    float rad = length(point);
+    float ringRad = 0.18 + Hash21(float2(seed, 11.0)) * 0.42;
+    float center = Hash21(float2(seed, 12.4));
+    float delta = abs(PointUnit(point) - center);
+    delta = min(delta, 1.0 - delta);
+    float arcLimit = 0.12 + Hash21(float2(seed, 13.6)) * 0.22;
+    if (delta > arcLimit)
+    {
+        return 1.0;
+    }
+    return abs(rad - ringRad);
+}
+
+struct CrackHit {
+    float gap;
+    float behind;
+    float seed;
+};
+
+CrackHit ConsiderRay(CrackHit hit, float2 point, float unit, float pointUnit)
+{
+    float gap = RadialGap(point, unit);
+    if (gap < hit.gap)
+    {
+        hit.gap = gap;
+    }
+    float behind = frac(pointUnit - unit);
+    if (behind < hit.behind)
+    {
+        hit.behind = behind;
+        hit.seed = unit;
+    }
+    return hit;
+}
+
+CrackHit GatherCracks(float2 point)
+{
+    CrackHit hit;
+    hit.gap = 1.0;
+    hit.behind = 2.0;
+    hit.seed = 0.0;
+    float pointUnit = PointUnit(point);
+    for (int ray = 0; ray < 4; ray++)
+    {
+        float index = float(ray);
+        hit = ConsiderRay(hit, point, RayUnit(index + 0.2), pointUnit);
+        hit = ConsiderRay(hit, point, RayUnit(index + 4.7), pointUnit);
+    }
+    hit.gap = min(hit.gap, RingGap(point, 1.0));
+    hit.gap = min(hit.gap, RingGap(point, 2.0));
+    return hit;
+}
+
+float2 ShardOffset(float shardSeed)
+{
+    float sx = Hash21(float2(shardSeed, 3.3)) * 2.0 - 1.0;
+    float sy = Hash21(float2(shardSeed, 8.8)) * 2.0 - 1.0;
+    return float2(sx, sy);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 point = (uv - 0.5) * float2(aspect, 1.0);
+
+    CrackHit hit = GatherCracks(point);
+    float2 shift = ShardOffset(hit.seed);
+    float2 shiftUv = float2(shift.x / max(aspect, 0.001), shift.y);
+    uv = saturate(uv + shiftUv * refraction * crack_amount);
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Width is in aspect space, where frame height is 1, so the line stays a few pixels.
+    float coreWidth = 0.0022;
+    float rimWidth = 0.0055;
+    float coreMask = 1.0 - smoothstep(0.0, coreWidth, hit.gap);
+    float rimMask = 1.0 - smoothstep(coreWidth, rimWidth, hit.gap);
+    rimMask = saturate(rimMask - coreMask);
+
+    float3 rgb = col.rgb * (1.0 - coreMask * crack_amount * 0.72);
+    rgb = rgb + rimMask * crack_amount * rim_gain * float3(0.92, 0.96, 1.0);
+    rgb = saturate(rgb);
+    return float4(rgb, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

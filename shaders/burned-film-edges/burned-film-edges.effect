@@ -1,0 +1,149 @@
+// Burned film edges
+// Ragged char along the frame and a slow ember band. Center stays clear.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float char_reach <
+    string label = "Char reach";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.28;
+    float step = 0.005;
+> = 0.09;
+
+uniform float ragged <
+    string label = "Ragged";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float char_amount <
+    string label = "Char amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.9;
+
+uniform float ember_amount <
+    string label = "Ember amount";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.75;
+
+uniform float speed <
+    string label = "Ember speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.35;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float EdgeRagged(float2 uv, float tick)
+{
+    float2 coarse = floor(uv * 7.0);
+    float2 fine = floor(uv * 16.0);
+    float bite = Hash21(coarse + float2(2.0, 5.0));
+    float tooth = Hash21(fine + float2(1.0, 4.0));
+    float crawl = Hash21(fine + float2(tick, 3.0));
+    return bite * 0.45 + tooth * 0.35 + crawl * 0.20;
+}
+
+float FrameAround(float2 uv)
+{
+    float2 edgeDist = min(uv, float2(1.0, 1.0) - uv);
+    float onVertical = step(edgeDist.x, edgeDist.y);
+    float onRight = step(0.5, uv.x);
+    float onTop = step(0.5, uv.y);
+    float horizontalS = lerp(uv.x * 0.25, 0.5 + (1.0 - uv.x) * 0.25, onTop);
+    float verticalS = lerp(0.75 + (1.0 - uv.y) * 0.25, 0.25 + uv.y * 0.25, onRight);
+    return lerp(horizontalS, verticalS, onVertical);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    // Height-fraction inset so the crust is the same pixel thickness on every side.
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 inset = min(uv, float2(1.0, 1.0) - uv);
+    inset.x *= aspect;
+    float inward = min(inset.x, inset.y);
+
+    // Slow edge reshape. Wrapped so a long stream does not freeze the hash.
+    float steps = floor(elapsed_time * speed * 0.15);
+    float tick = steps - floor(steps / max(48.0, 0.001)) * 48.0;
+    float shape = EdgeRagged(uv, tick);
+    float spread = lerp(1.0 - ragged * 0.42, 1.0 + ragged * 0.5, shape);
+    float breath = 1.0 + sin(elapsed_time * speed * 0.4) * 0.035;
+    float reach = max(char_reach * spread * breath, 0.0);
+    float reachSafe = max(reach, 0.001);
+    float present = step(0.0005, char_reach);
+
+    float crust = 1.0 - smoothstep(reachSafe * 0.05, reachSafe * 0.46, inward);
+    float ember = smoothstep(0.0, reachSafe * 0.22, inward);
+    ember *= 1.0 - smoothstep(reachSafe * 0.34, reachSafe, inward);
+    crust = saturate(crust * char_amount * present);
+    ember = saturate(ember * present);
+
+    // One coal travels the frame in about 20 seconds at the default speed.
+    float around = FrameAround(uv);
+    float phase = frac(around + elapsed_time * speed * 0.14);
+    float lobe = saturate(1.0 - abs(phase - 0.5) * 14.0);
+
+    float3 charCol = float3(0.012, 0.005, 0.003);
+    float3 emberDim = float3(0.62, 0.14, 0.03);
+    float3 emberHot = float3(1.0, 0.58, 0.14);
+    float3 emberCol = lerp(emberDim, emberHot, lobe);
+
+    float3 rgb = lerp(col.rgb, charCol, crust);
+    float emberMask = saturate(ember * (1.0 - crust * 0.5) * lerp(0.28, 1.0, lobe) * ember_amount);
+    rgb = lerp(rgb, emberCol, emberMask);
+    rgb = saturate(rgb);
+
+    return float4(rgb, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

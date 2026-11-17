@@ -1,0 +1,116 @@
+// sandstorm-grade
+// Warm blowing-sand grade and horizontal streaks. A talking head stays readable.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.6;
+
+uniform float warmth <
+    string label = "Warmth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.75;
+
+uniform float streaks <
+    string label = "Streaks";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.5;
+
+uniform float wind <
+    string label = "Wind";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float SandBand(float2 plane, float travel, float rows, float laneCut)
+{
+    float row = floor(plane.y * rows);
+    float rowHash = Hash21(float2(row, 19.0));
+    float lane = step(laneCut, rowHash);
+    float yInRow = frac(plane.y * rows);
+    float thickness = smoothstep(0.0, 0.05, yInRow) * (1.0 - smoothstep(0.05, 0.22, yInRow));
+    float speed = 0.08 + rowHash * 0.4;
+    float scroll = frac(plane.x * 0.45 - travel * speed + rowHash * 9.0);
+    float bead = smoothstep(0.02, 0.18, scroll) * (1.0 - smoothstep(0.18, 0.62, scroll));
+    float grit = Hash21(float2(floor(plane.x * 150.0 - travel * 28.0), row));
+    return lane * thickness * bead * (0.35 + grit * 0.65);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 plane = float2(uv.x * aspect, uv.y);
+    float travel = elapsed_time * wind;
+    // Slow shear, under 0.1 Hz. Position only, not a full-frame flash.
+    float push = sin(elapsed_time * 0.55 + uv.y * 16.0) * 0.008 * strength * wind;
+
+    float4 src = image.Sample(textureSampler, uv + float2(push, 0.0));
+    float luma = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float3 warmTone = float3(
+        saturate(luma * 1.10 + 0.04),
+        saturate(luma * 0.88 + 0.02),
+        saturate(luma * 0.55)
+    );
+    float3 graded = lerp(src.rgb, warmTone, warmth * strength);
+
+    float fine = SandBand(plane, travel, 40.0, 0.68);
+    float wide = SandBand(plane, travel * 0.55, 7.0, 0.84);
+    float mask = saturate(fine + wide * 0.7) * streaks * strength;
+    float3 sand = float3(0.76, 0.56, 0.31);
+    graded = lerp(graded, sand, mask);
+
+    return float4(saturate(graded), src.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

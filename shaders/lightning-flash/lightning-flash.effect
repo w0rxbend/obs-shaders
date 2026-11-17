@@ -1,0 +1,128 @@
+// lightning-flash
+// Short cool-white strikes. Between them the source is unchanged.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float gap <
+    string label = "Gap";
+    string widget_type = "slider";
+    float minimum = 0.45;
+    float maximum = 4.0;
+    float step = 0.01;
+> = 1.8;
+
+uniform float strength <
+    string label = "Strength";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.7;
+
+uniform float thickness <
+    string label = "Thickness";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+    p3 = p3 + dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float JagAt(float row, float blend, float seed, float spread)
+{
+    float lower = Hash21(float2(row, seed)) - 0.5;
+    float upper = Hash21(float2(row + 1.0, seed)) - 0.5;
+    return lerp(lower, upper, blend) * spread;
+}
+
+float CoreGlow(float dist, float width)
+{
+    float safeWidth = max(width, 0.001);
+    float core = saturate(1.0 - dist / safeWidth);
+    float halo = saturate(1.0 - dist / max(safeWidth * 5.0, 0.001));
+    return saturate(core * core + halo * 0.32);
+}
+
+float StrikeMask(float2 uv, float aspect, float strikeId, float width)
+{
+    float rowPos = uv.y * 20.0;
+    float row = floor(rowPos);
+    float blend = frac(rowPos);
+    float jag = JagAt(row, blend, strikeId + 1.3, 0.22);
+    float anchor = 0.5 + (Hash21(float2(strikeId, 4.4)) - 0.5) * 0.55;
+    float trunk = CoreGlow(abs((uv.x - anchor) * aspect - jag), width);
+
+    float fork = 0.22 + Hash21(float2(strikeId, 7.1)) * 0.46;
+    float branchAnchor = anchor + (Hash21(float2(strikeId, 8.8)) - 0.5) * 0.16;
+    float branchJag = JagAt(row, blend, strikeId + 5.5, 0.12);
+    float branchDist = abs((uv.x - branchAnchor) * aspect - branchJag);
+    float branchSpan = step(fork, uv.y) * step(uv.y, fork + 0.4);
+    float branch = CoreGlow(branchDist, max(width * 0.6, 0.001)) * branchSpan;
+    return saturate(trunk + branch * 0.85);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    // Gap floor is 0.45s and each slot has one pulse, so the lift stays under 3 Hz.
+    float clock = fmod(elapsed_time, 4096.0);
+    float gapSafe = max(gap, 0.001);
+    float cycle = clock / gapSafe;
+    float strikeId = floor(cycle);
+    float age = frac(cycle) * gapSafe;
+    float peak = saturate(1.0 - age / max(0.08, 0.001));
+    float hit = step(0.4, Hash21(float2(strikeId, 2.7)));
+    float pulse = peak * peak * hit;
+
+    float width = 0.004 + thickness * 0.02;
+    float mask = StrikeMask(uv, aspect, strikeId, width);
+    float wash = pulse * strength * 0.16;
+    float3 cool = float3(0.82, 0.91, 1.0);
+    float3 bolt = float3(0.93, 0.97, 1.0) * mask * pulse * strength;
+    float3 lit = saturate(col.rgb + col.rgb * wash + cool * wash * 0.35 + bolt);
+    float3 rgb = lerp(col.rgb, lit, step(0.001, pulse));
+    return float4(rgb, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

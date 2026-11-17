@@ -1,0 +1,121 @@
+// wet-lens-streaks
+// Beads and thin trails refract the picture. Glass between them stays sharp.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float density <
+    string label = "Density";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float speed <
+    string label = "Speed";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 2.5;
+    float step = 0.01;
+> = 0.75;
+
+uniform float refraction <
+    string label = "Refraction";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.05;
+    float step = 0.001;
+> = 0.014;
+
+uniform float bead_scale <
+    string label = "Bead Size";
+    string widget_type = "slider";
+    float minimum = 0.4;
+    float maximum = 2.0;
+    float step = 0.01;
+> = 1.0;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float Hash21(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// Period 5 matches the one-uv wrap, so a bead does not pop when the clock repeats.
+float4 BeadColumn(float2 uv, float column_x, float seed)
+{
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float width = max(0.0065 * bead_scale, 0.001);
+    float slide = frac(elapsed_time * speed * 0.055);
+    float y_field = uv.y - slide + seed * 0.17;
+    float cell = floor(y_field * 5.0);
+    float cell_id = cell - floor(cell / max(5.0, 0.001)) * 5.0;
+    float bead_y = (cell + 0.8) / max(5.0, 0.001);
+    float dx = (uv.x - column_x) / max(width, 0.001);
+    float dy = (y_field - bead_y) / max(width * aspect, 0.001);
+    float bead = exp(-(dx * dx + dy * dy));
+    float above = saturate((bead_y - y_field) / max(0.16, 0.001));
+    float tail = exp(-(dx * dx) * 2.6) * above * above;
+    float gate = Hash21(float2(column_x * 19.0 + seed, cell_id));
+    float shown = step(1.0 - saturate(density) * 0.78, gate);
+    float water = shown * max(bead, tail * 0.55);
+    float bend_x = -shown * dx * exp(-(dx * dx)) * max(bead, tail * 0.4);
+    float bend_y = -shown * dy * bead;
+    float glint = shown * bead * bead;
+    return float4(water, bend_x, bend_y, glint);
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 wet = float4(0.0, 0.0, 0.0, 0.0);
+
+    for (int column = 0; column < 4; column++)
+    {
+        float index = float(column);
+        wet += BeadColumn(uv, 0.14 + index * 0.24, 2.3 + index * 3.9);
+    }
+
+    float water = saturate(wet.x);
+    float2 bent_uv = saturate(uv + float2(wet.y, wet.z) * refraction);
+    float4 clear_px = image.Sample(textureSampler, uv);
+    float4 bent_px = image.Sample(textureSampler, bent_uv);
+
+    float3 rgb = lerp(clear_px.rgb, bent_px.rgb, water);
+    rgb = lerp(rgb, rgb * float3(0.84, 0.92, 1.0), water * 0.3);
+    rgb += float3(0.95, 0.98, 1.0) * saturate(wet.w) * 0.1;
+    return float4(saturate(rgb), clear_px.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

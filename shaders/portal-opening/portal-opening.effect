@@ -1,0 +1,91 @@
+// portal-opening
+// Growing ring from the center. Inside stays the source. Outside is a dim rim.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float open_speed <
+    string label = "Open Speed";
+    string widget_type = "slider";
+    float minimum = 0.05;
+    float maximum = 0.45;
+    float step = 0.01;
+> = 0.12;
+
+uniform float outside_dim <
+    string label = "Outside Dim";
+    string widget_type = "slider";
+    float minimum = 0.35;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.62;
+
+uniform float rim_width <
+    string label = "Rim Width";
+    string widget_type = "slider";
+    float minimum = 0.006;
+    float maximum = 0.08;
+    float step = 0.001;
+> = 0.02;
+
+uniform texture2d image;
+uniform float elapsed_time;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 source_color = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 from_center = uv - float2(0.5, 0.5);
+    from_center.x *= aspect;
+    float dist = length(from_center);
+    float reach = length(float2(aspect * 0.5, 0.5));
+
+    // Default 0.12 is one grow about every eight seconds, not a full-frame flash.
+    float cycle = frac(fmod(elapsed_time * open_speed, 1.0));
+    float radius = cycle * reach;
+    float span = max(rim_width, 0.001);
+
+    float outside = smoothstep(radius, radius + span, dist);
+    // 4 keeps the crease peak at 1 so the rim stays a dim edge, not a blowout.
+    float rim_peak = saturate(outside * (1.0 - outside) * 4.0);
+
+    float3 dim_rgb = source_color.rgb * outside_dim;
+    float3 rim_rgb = dim_rgb * float3(0.70, 0.82, 0.95);
+    float3 portal_rgb = lerp(source_color.rgb, dim_rgb, outside);
+    portal_rgb = lerp(portal_rgb, rim_rgb, rim_peak);
+    portal_rgb = saturate(portal_rgb);
+
+    return float4(portal_rgb, source_color.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

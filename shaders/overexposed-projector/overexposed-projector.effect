@@ -1,0 +1,102 @@
+// overexposed-projector
+// Lifted exposure and a soft warm projector hotspot. Default stays off full white.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float exposure <
+    string label = "Exposure";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.34;
+
+uniform float hotspot <
+    string label = "Hotspot";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.4;
+
+uniform float softness <
+    string label = "Softness";
+    string widget_type = "slider";
+    float minimum = 0.2;
+    float maximum = 1.6;
+    float step = 0.01;
+> = 0.9;
+
+uniform float warmth <
+    string label = "Warmth";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.3;
+
+uniform texture2d image;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    float aspect = uv_size.x / max(uv_size.y, 1.0);
+    float2 centered = uv - float2(0.5, 0.44);
+    centered.x *= aspect;
+    float dist = length(centered);
+
+    float reach = max(softness, 0.001);
+    float pool = saturate(1.0 - dist / reach);
+    pool = pool * pool;
+
+    // Gain plus a shoulder so the default lift does not clip the frame to white.
+    float gain = 1.0 + exposure * 0.4;
+    float3 graded = col.rgb * gain + exposure * 0.03;
+    float knee = 0.8;
+    float3 over = max(graded - knee, float3(0.0, 0.0, 0.0));
+    float3 denom = max(float3(1.0, 1.0, 1.0) + over * 2.4, float3(0.001, 0.001, 0.001));
+    graded = min(graded, float3(knee, knee, knee)) + over / denom;
+
+    float3 lamp = float3(1.0, 0.94, 0.8);
+    graded = graded + lamp * (hotspot * pool * 0.18);
+    graded = lerp(graded, graded * lamp, warmth * pool);
+
+    float edgeReach = max(reach * 1.2, 0.001);
+    float edge = saturate(dist / edgeReach);
+    graded = graded * lerp(1.0, 0.88, edge * 0.5);
+
+    return float4(saturate(graded), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}

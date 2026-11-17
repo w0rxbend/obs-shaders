@@ -1,0 +1,120 @@
+// bleached-magazine
+// Washed print: lifted blacks, weak color, a light halftone.
+
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
+uniform float black_lift <
+    string label = "Black Lift";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 0.4;
+    float step = 0.01;
+> = 0.14;
+
+uniform float color_keep <
+    string label = "Color";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.42;
+
+uniform float halftone <
+    string label = "Halftone";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.0;
+    float step = 0.01;
+> = 0.22;
+
+uniform float dot_size <
+    string label = "Dot Size";
+    string widget_type = "slider";
+    float minimum = 3.0;
+    float maximum = 24.0;
+    float step = 0.1;
+> = 7.0;
+
+uniform float screen_angle <
+    string label = "Screen Angle";
+    string widget_type = "slider";
+    float minimum = 0.0;
+    float maximum = 1.57;
+    float step = 0.01;
+> = 0.35;
+
+uniform texture2d image;
+uniform float2 uv_size;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float4 col = image.Sample(textureSampler, uv);
+
+    float3 paper = float3(0.94, 0.91, 0.84);
+    float3 ink = float3(0.11, 0.09, 0.08);
+
+    float3 lifted = col.rgb * (1.0 - black_lift) + paper * black_lift;
+    lifted = saturate(lifted);
+
+    float luma = dot(lifted, float3(0.299, 0.587, 0.114));
+    float3 news = float3(luma * 0.98 + 0.02, luma * 0.95 + 0.015, luma * 0.88);
+    float3 weak = lerp(news, lifted, color_keep);
+    weak = saturate(weak);
+
+    // Pixel space keeps the screen round. One sample so the face stays sharp.
+    float2 pixelSize = max(uv_size, float2(1.0, 1.0));
+    float2 px = uv * pixelSize;
+    float2 origin = pixelSize * 0.5;
+    float ang = screen_angle;
+    float sn = sin(ang);
+    float cs = cos(ang);
+    float2 delta = px - origin;
+    float2 rot = float2(delta.x * cs - delta.y * sn, delta.x * sn + delta.y * cs);
+
+    float cell = max(dot_size, 0.001);
+    float2 grid = rot / cell;
+    float2 cellPos = frac(grid) - float2(0.5, 0.5);
+    float dist = length(cellPos);
+
+    float shade = saturate(1.0 - luma);
+    float radius = shade * 0.46;
+    float feather = 0.06;
+    float inner = max(radius - feather, 0.0);
+    float outer = max(radius + feather, inner + 0.001);
+    float dotMask = 1.0 - smoothstep(inner, outer, dist);
+    float printMix = saturate(dotMask * halftone * lerp(0.45, 1.0, shade));
+
+    float3 printed = lerp(weak, ink, printMix);
+    return float4(saturate(printed), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
+}
