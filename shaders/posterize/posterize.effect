@@ -4,7 +4,13 @@
 uniform float4x4 ViewProj;
 uniform float2 uv_offset;
 uniform float2 uv_scale;
-uniform int   levels = 4;    // 2 – 16  colour steps per channel
+uniform int levels <
+    string label = "Levels";
+    string widget_type = "slider";
+    int minimum = 2;
+    int maximum = 16;
+    int step = 1;
+> = 4;
 uniform float dither <
     string label = "Dither";
     string widget_type = "slider";
