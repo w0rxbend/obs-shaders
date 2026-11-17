@@ -105,25 +105,16 @@ float4 mainImage(VertData v_in) : TARGET
     float4 color = image.Sample(textureSampler, uv);
     float2 px = max(uv_pixel_interval, float2(0.001, 0.001));
     float2 near_step = px * 7.0;
-    float2 far_step = px * 18.0;
 
     float4 near_l = image.Sample(textureSampler, clamp(uv - float2(near_step.x, 0.0), 0.0, 1.0));
     float4 near_r = image.Sample(textureSampler, clamp(uv + float2(near_step.x, 0.0), 0.0, 1.0));
     float4 near_d = image.Sample(textureSampler, clamp(uv - float2(0.0, near_step.y), 0.0, 1.0));
     float4 near_u = image.Sample(textureSampler, clamp(uv + float2(0.0, near_step.y), 0.0, 1.0));
-    float4 far_l = image.Sample(textureSampler, clamp(uv - float2(far_step.x, 0.0), 0.0, 1.0));
-    float4 far_r = image.Sample(textureSampler, clamp(uv + float2(far_step.x, 0.0), 0.0, 1.0));
-    float4 far_d = image.Sample(textureSampler, clamp(uv - float2(0.0, far_step.y), 0.0, 1.0));
-    float4 far_u = image.Sample(textureSampler, clamp(uv + float2(0.0, far_step.y), 0.0, 1.0));
 
     float contrast = channelDelta(near_l.rgb, color.rgb);
     contrast = max(contrast, channelDelta(near_r.rgb, color.rgb));
     contrast = max(contrast, channelDelta(near_d.rgb, color.rgb));
     contrast = max(contrast, channelDelta(near_u.rgb, color.rgb));
-    contrast = max(contrast, channelDelta(far_l.rgb, color.rgb));
-    contrast = max(contrast, channelDelta(far_r.rgb, color.rgb));
-    contrast = max(contrast, channelDelta(far_d.rgb, color.rgb));
-    contrast = max(contrast, channelDelta(far_u.rgb, color.rgb));
 
     float kernel = saturate(clamp(amount, 0.0, 2.0) / 1.25);
     float edge_lo = lerp(0.18, 0.06, kernel);
@@ -138,11 +129,10 @@ float4 mainImage(VertData v_in) : TARGET
 
     float reach = lerp(1.0, lerp(4.0, 20.0, kernel), text);
     float2 blur_step = px * reach;
-    float4 blur = image.Sample(textureSampler, quant_uv) * 0.36;
+    // Vertical taps are folded into the center so the shader stays at 8 samples.
+    float4 blur = image.Sample(textureSampler, quant_uv) * 0.68;
     blur += image.Sample(textureSampler, clamp(quant_uv + float2(blur_step.x, 0.0), 0.0, 1.0)) * 0.16;
     blur += image.Sample(textureSampler, clamp(quant_uv - float2(blur_step.x, 0.0), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(quant_uv + float2(0.0, blur_step.y), 0.0, 1.0)) * 0.16;
-    blur += image.Sample(textureSampler, clamp(quant_uv - float2(0.0, blur_step.y), 0.0, 1.0)) * 0.16;
 
     float tick = floor(elapsed_time * max(speed, 0.0) * 2.0);
     float noise_cell = max(block_px * 0.35, 2.0);
@@ -158,7 +148,6 @@ float4 mainImage(VertData v_in) : TARGET
     float cover = saturate(text * min(crush, 1.5)) * saturate(opacity);
     float3 out_rgb = lerp(color.rgb, destroyed, cover);
     float out_a = color.a;
-    [branch]
     if (!preserve_alpha)
     {
         out_a = saturate(color.a);

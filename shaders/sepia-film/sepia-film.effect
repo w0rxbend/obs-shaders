@@ -1,6 +1,10 @@
 // C2 — sepia-film
 // Classic sepia tone with animated film grain.
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float strength <
     string label = "Strength";
     string widget_type = "slider";
@@ -32,6 +36,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float Hash21(float2 p)
 {
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
@@ -60,4 +72,13 @@ float4 mainImage(VertData v_in) : TARGET
     result = saturate(result + noise * grain);
 
     return float4(result, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

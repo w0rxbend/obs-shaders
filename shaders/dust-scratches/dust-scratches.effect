@@ -1,6 +1,10 @@
 // C4 — dust-scratches
 // Procedural animated film dust spots and vertical scratch lines.
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float dust_amount <
     string label = "Dust Amount";
     string widget_type = "slider";
@@ -39,6 +43,14 @@ struct VertData {
     float4 pos : POSITION;
     float2 uv  : TEXCOORD0;
 };
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
 
 float Hash11(float x)
 {
@@ -86,7 +98,7 @@ float ScratchLayer(float2 uv, float frameSeed, float amount)
     for (int i = 0; i < 4; i++)
     {
         float fi    = float(i);
-        float active = step(Hash11(frameSeed + fi * 17.3 + 100.0), amount);
+        float gate = step(Hash11(frameSeed + fi * 17.3 + 100.0), amount);
         float xPos   = Hash11(frameSeed + fi * 31.7 + 200.0);
         float width  = 0.001 + Hash11(frameSeed + fi * 53.1 + 300.0) * 0.002;
         float bright = Hash11(frameSeed + fi * 11.9 + 400.0);   // 0=dark, 1=bright
@@ -95,7 +107,7 @@ float ScratchLayer(float2 uv, float frameSeed, float amount)
         // Vary scratch along Y: break it with gaps
         float yGap   = Hash21(float2(floor(uv.y * 60.0), frameSeed + fi));
         float gap     = step(0.15, yGap);                        // 15% chance of gap
-        result       += mark * active * gap * (0.6 + bright * 0.4);
+        result       += mark * gate * gap * (0.6 + bright * 0.4);
     }
     return saturate(result);
 }
@@ -118,4 +130,13 @@ float4 mainImage(VertData v_in) : TARGET
     col.rgb = lerp(col.rgb, float3(0.95, 0.92, 0.85), scratch * scratch_amount);
 
     return float4(saturate(col.rgb), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

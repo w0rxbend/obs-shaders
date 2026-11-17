@@ -5,6 +5,10 @@
 // loss_duration  : fraction of each cycle that is "lost" (0.0–1.0, default 0.2)
 // noise_color    : false = white noise, true = phosphor-green noise
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float loss_frequency <
     string label = "Loss Frequency";
     string widget_type = "slider";
@@ -37,6 +41,14 @@ struct VertData {
     float4 pos : POSITION;
     float2 uv  : TEXCOORD0;
 };
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
 
 float hash2(float2 p)
 {
@@ -101,4 +113,13 @@ float4 mainImage(VertData v_in) : TARGET
     float3 col = lerp(orig.rgb, saturate(staticColor), lossBlend);
 
     return float4(saturate(col), orig.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

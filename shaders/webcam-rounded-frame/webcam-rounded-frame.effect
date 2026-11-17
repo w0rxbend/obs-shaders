@@ -5,6 +5,10 @@
 // Use case: Rounds the webcam image with a smooth alpha mask and draws a colored border ring
 // Chain order: Apply first in chain, before color grading effects
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float radius <
     string label = "Radius";
     string widget_type = "slider";
@@ -67,6 +71,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 // p is centered in height-normalized space so the radius stays circular.
 float sdRoundedRect(float2 p, float2 half_extent, float r)
 {
@@ -104,4 +116,13 @@ float4 mainImage(VertData v_in) : TARGET
     float alpha = col.a * outer_mask;
 
     return float4(rgb, alpha);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

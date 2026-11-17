@@ -89,12 +89,21 @@ VertData VSDefault(VertData v_in)
 float alphaOut(float sampled_alpha)
 {
     float alpha = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         alpha = sampled_alpha * saturate(opacity);
     }
     return alpha;
+}
+
+float angle_from(float y, float x)
+{
+    // Pack rule rejects atan2. One-argument atan stays inside the effect compiler.
+    float ax = max(abs(x), 0.0001);
+    float a = atan(y / ax);
+    if (x < 0.0)
+        a = (y < 0.0 ? -3.14159265 : 3.14159265) - a;
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
@@ -111,7 +120,7 @@ float4 mainImage(VertData v_in) : TARGET
     // Wrap the clock so a long stream does not lose the crawl phase.
     float clock = fmod(elapsed_time * speed, 1024.0);
     float breath = 0.5 + 0.5 * sin(clock * 0.85);
-    float angle = atan2(from_center.y, from_center.x);
+    float angle = angle_from(from_center.y, from_center.x);
     float crawl = 0.5 + 0.5 * sin(angle * 4.0 - clock * 1.15);
     float unstable = edge * lerp(0.55, 1.0, crawl);
 

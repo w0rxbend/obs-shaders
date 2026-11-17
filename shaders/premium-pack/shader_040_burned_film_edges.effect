@@ -96,7 +96,6 @@ float hash12(float2 p)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = sampled_alpha * saturate(opacity);

@@ -95,7 +95,6 @@ float luma3(float3 c)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;
@@ -116,10 +115,8 @@ float4 mainImage(VertData v_in) : TARGET
 
     float3 acc = float3(0.0, 0.0, 0.0);
     float wsum = 0.0;
-    [unroll]
     for (int j = -1; j <= 1; j++)
     {
-        [unroll]
         for (int i = -1; i <= 1; i++)
         {
             float2 tap_uv = uv + jitter + float2(float(i), float(j)) * uv_pixel_interval * radius;

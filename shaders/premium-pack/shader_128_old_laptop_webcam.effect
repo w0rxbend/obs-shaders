@@ -102,7 +102,6 @@ float luma3(float3 c)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;
@@ -149,8 +148,8 @@ float4 mainImage(VertData v_in) : TARGET
     float luma = luma3(rgb);
     float3 dull = lerp(rgb, float3(luma, luma, luma), 0.42 * look);
     float3 shaped = (dull - 0.5) * lerp(1.0, 0.78, look) + 0.5;
-    float3 cast = shaped * float3(1.05, 1.09, 0.84) + float3(0.02, 0.03, 0.0);
-    shaped = lerp(shaped, cast, look);
+    float3 tint = shaped * float3(1.05, 1.09, 0.84) + float3(0.02, 0.03, 0.0);
+    shaped = lerp(shaped, tint, look);
 
     float2 grain_cell = floor(lens / max(cell, float2(0.001, 0.001)));
     float tick = floor(elapsed_time * speed * 2.0);

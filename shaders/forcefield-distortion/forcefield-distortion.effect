@@ -79,7 +79,7 @@ float4 mainImage(VertData v_in) : TARGET
 
     for (int i = 0; i < 5; i++)
     {
-        float band = (float)i;
+        float band = float(i);
         if (band >= wave_count)
             break;
 

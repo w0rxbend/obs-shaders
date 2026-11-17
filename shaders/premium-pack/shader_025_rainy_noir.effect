@@ -120,7 +120,6 @@ float rainLayer(float2 uv, float time_s, float columns, float seed)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = sampled_alpha * saturate(opacity);

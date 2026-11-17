@@ -139,7 +139,6 @@ float4 mainImage(VertData v_in) : TARGET
     graded = saturate(graded);
     float3 out_rgb = lerp(color.rgb, graded, saturate(opacity));
     float out_a = color.a;
-    [branch]
     if (!preserve_alpha)
     {
         out_a = saturate(color.a);

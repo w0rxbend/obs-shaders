@@ -95,7 +95,6 @@ float luma3(float3 c)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;
@@ -113,10 +112,8 @@ float4 mainImage(VertData v_in) : TARGET
 
     float3 blur_sum = float3(0.0, 0.0, 0.0);
     float weight_sum = 0.0;
-    [unroll]
     for (int j = -1; j <= 1; j++)
     {
-        [unroll]
         for (int i = -1; i <= 1; i++)
         {
             float ax = abs(float(i));

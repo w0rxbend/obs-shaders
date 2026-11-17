@@ -95,7 +95,6 @@ float luma3(float3 c)
 
 float alphaOut(float sampled_alpha)
 {
-    [branch]
     if (preserve_alpha)
     {
         return sampled_alpha;
@@ -124,18 +123,13 @@ float4 mainImage(VertData v_in) : TARGET
     float2 step = max(uv_pixel_interval, float2(0.001, 0.001)) * radius;
     float2 cardinal_x = float2(step.x, 0.0);
     float2 cardinal_y = float2(0.0, step.y);
-    float2 diagonal_a = float2(step.x, step.y) * 0.7071;
-    float2 diagonal_b = float2(step.x, -step.y) * 0.7071;
 
-    float4 blur = image.Sample(textureSampler, quant_uv) * 0.20;
+    // Diagonal taps are folded into the center so the shader stays at 6 samples.
+    float4 blur = image.Sample(textureSampler, quant_uv) * 0.52;
     blur += image.Sample(textureSampler, clamp(quant_uv + cardinal_x, 0.0, 1.0)) * 0.12;
     blur += image.Sample(textureSampler, clamp(quant_uv - cardinal_x, 0.0, 1.0)) * 0.12;
     blur += image.Sample(textureSampler, clamp(quant_uv + cardinal_y, 0.0, 1.0)) * 0.12;
     blur += image.Sample(textureSampler, clamp(quant_uv - cardinal_y, 0.0, 1.0)) * 0.12;
-    blur += image.Sample(textureSampler, clamp(quant_uv + diagonal_a, 0.0, 1.0)) * 0.08;
-    blur += image.Sample(textureSampler, clamp(quant_uv - diagonal_a, 0.0, 1.0)) * 0.08;
-    blur += image.Sample(textureSampler, clamp(quant_uv + diagonal_b, 0.0, 1.0)) * 0.08;
-    blur += image.Sample(textureSampler, clamp(quant_uv - diagonal_b, 0.0, 1.0)) * 0.08;
 
     float gray = luma3(blur.rgb);
     float3 slate = float3(0.78, 0.84, 0.90);

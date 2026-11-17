@@ -89,12 +89,21 @@ VertData VSDefault(VertData v_in)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;
     }
     return a * saturate(opacity);
+}
+
+float angle_from(float y, float x)
+{
+    // Pack rule rejects atan2. One-argument atan stays inside the effect compiler.
+    float ax = max(abs(x), 0.0001);
+    float a = atan(y / ax);
+    if (x < 0.0)
+        a = (y < 0.0 ? -3.14159265 : 3.14159265) - a;
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
@@ -111,7 +120,7 @@ float4 mainImage(VertData v_in) : TARGET
     float slices = 3.0 + floor(saturate(amount * 0.5) * 5.0);
     float slice = tau / max(slices, 0.001);
     float spin = fmod(elapsed_time * speed * 0.15, tau);
-    float ang = atan2(from_center.y, from_center.x) + spin;
+    float ang = angle_from(from_center.y, from_center.x) + spin;
     float sector = fmod(ang, slice);
     if (sector < 0.0)
     {

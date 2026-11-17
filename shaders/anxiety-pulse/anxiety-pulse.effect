@@ -5,6 +5,10 @@
 // Use case: Fast irregular heartbeat-like brightness/contrast pulse with red edge creep
 // Chain order: early in chain, before color grading
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float pulse_speed <
     string label = "Pulse Speed";
     string widget_type = "slider";
@@ -42,6 +46,14 @@ struct VertData {
     float4 pos : POSITION;
     float2 uv  : TEXCOORD0;
 };
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
 
 // Irregular heartbeat: combines two sine waves at different frequencies
 // to produce an ECG-like beat pattern.
@@ -89,4 +101,13 @@ float4 mainImage(VertData v_in) : TARGET
     rgb = lerp(rgb, redColor, edgeFactor * redStrength);
 
     return float4(saturate(rgb), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

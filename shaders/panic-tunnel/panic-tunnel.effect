@@ -5,6 +5,10 @@
 // Use case: Tunnel vision with rapid zoom-blur toward center and dark edges closing in
 // Chain order: early; apply before color corrections
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float tunnel_strength <
     string label = "Tunnel Strength";
     string widget_type = "slider";
@@ -37,6 +41,14 @@ struct VertData {
     float4 pos : POSITION;
     float2 uv  : TEXCOORD0;
 };
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
 
 float4 mainImage(VertData v_in) : TARGET
 {
@@ -86,4 +98,13 @@ float4 mainImage(VertData v_in) : TARGET
     rgb *= vignette;
 
     return float4(saturate(rgb), orig.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

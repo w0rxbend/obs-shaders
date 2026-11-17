@@ -113,7 +113,6 @@ float sandGrain(float2 uv, float cells, float scroll_rate)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;

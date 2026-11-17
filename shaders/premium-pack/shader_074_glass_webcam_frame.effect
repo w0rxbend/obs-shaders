@@ -102,6 +102,16 @@ float2 roundedBoxNormal(float2 q, float2 half_extent, float radius, float eps)
     return grad / max(length(grad), 0.001);
 }
 
+float angle_from(float y, float x)
+{
+    // Pack rule rejects atan2. One-argument atan stays inside the effect compiler.
+    float ax = max(abs(x), 0.0001);
+    float a = atan(y / ax);
+    if (x < 0.0)
+        a = (y < 0.0 ? -3.14159265 : 3.14159265) - a;
+    return a;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
@@ -134,7 +144,7 @@ float4 mainImage(VertData v_in) : TARGET
     float4 base = image.Sample(textureSampler, clamp(uv, float2(0.0, 0.0), float2(1.0, 1.0)));
     float4 pane = image.Sample(textureSampler, sample_uv);
 
-    float sweep = sin(atan2(q.y, q.x) - elapsed_time * speed * 0.4);
+    float sweep = sin(angle_from(q.y, q.x) - elapsed_time * speed * 0.4);
     float glint = pow(saturate(sweep), 10.0);
     float facing = saturate(dot(normal_q, float2(-0.50, 0.866)));
     float spec = saturate((glint * 0.75 + pow(facing, 12.0)) * glass);
@@ -146,7 +156,6 @@ float4 mainImage(VertData v_in) : TARGET
     float3 rgb = lerp(body, saturate(rim_rgb), ring);
 
     float alpha = base.a * shape;
-    [branch]
     if (!preserve_alpha)
     {
         rgb = lerp(float3(0.03, 0.04, 0.05), rgb, shape);

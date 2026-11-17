@@ -70,7 +70,7 @@ float4 mainImage(VertData v_in) : TARGET
     for (int i = 0; i < 9; i++)
     {
         // t goes from -0.5 to +0.5 around current pixel
-        float t = ((float)i / max(8.0, 0.001)) - 0.5;
+        float t = (float(i) / max(8.0, 0.001)) - 0.5;
         float2 sampleUV = uv + dir * t * blur_amount * 2.0;
         sampleUV = clamp(sampleUV, 0.0, 1.0);
         float4 tap = image.Sample(textureSampler, sampleUV);

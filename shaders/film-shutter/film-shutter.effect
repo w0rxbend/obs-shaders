@@ -59,7 +59,7 @@ float4 mainImage(VertData v_in) : TARGET
     float2 uv = v_in.uv;
     float4 color = image.Sample(textureSampler, uv);
 
-    float bar_n = max((float)bar_count, 1.0);
+    float bar_n = max(float(bar_count), 1.0);
     float bar_pos = frac(uv.y * bar_n);
     float dist = abs(bar_pos - 0.5);
     float half_open = saturate(progress) * 0.5;

@@ -75,7 +75,6 @@ float4 mainImage(VertData v_in) : TARGET
     float3 bleedYiq = float3(0.0, 0.0, 0.0);
     float  totalW   = 0.0;
 
-    [unroll]
     for (int t = 1; t <= 6; t++)
     {
         float  offset = bleed * float(t);

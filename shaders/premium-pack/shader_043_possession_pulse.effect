@@ -110,7 +110,6 @@ float possessionBeat(float wrapped_time, float rate)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = sampled_alpha * saturate(opacity);

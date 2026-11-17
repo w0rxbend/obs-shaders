@@ -128,7 +128,6 @@ float2 ashLayer(float2 uv, float time_s, float scale, float seed)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;

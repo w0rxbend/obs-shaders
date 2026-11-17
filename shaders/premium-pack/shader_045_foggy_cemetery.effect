@@ -130,7 +130,6 @@ float headstoneMask(float2 uv, float aspect)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = sampled_alpha * saturate(opacity);

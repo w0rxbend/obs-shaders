@@ -69,7 +69,8 @@ float4 mainImage(VertData v_in) : TARGET
     // --- Crush blacks / boost contrast ---
     // Remap: lift midpoint to create deep blacks
     float3 col = src.rgb;
-    col = pow(saturate(col), max(contrast, 0.001));
+    float curve = max(contrast, 0.001);
+    col = pow(saturate(col), float3(curve, curve, curve));
     // Lift slightly to avoid pure black being too dead
     col = saturate(col - 0.02);
 

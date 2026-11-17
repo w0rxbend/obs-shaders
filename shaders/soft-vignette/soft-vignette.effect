@@ -1,6 +1,10 @@
 // A2 — soft-vignette
 // Darkens edges with a smooth elliptical gradient.
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float strength <
     string label = "Strength";
     string widget_type = "slider";
@@ -40,6 +44,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv  = v_in.uv;
@@ -64,4 +76,13 @@ float4 mainImage(VertData v_in) : TARGET
     float darken = 1.0 - vignette * strength;
     col.rgb = saturate(col.rgb * darken);
     return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

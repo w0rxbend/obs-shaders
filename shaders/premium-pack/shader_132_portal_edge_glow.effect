@@ -89,12 +89,21 @@ VertData VSDefault(VertData v_in)
 float alphaOut(float sampled_alpha)
 {
     float alpha = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         alpha = 1.0;
     }
     return alpha;
+}
+
+float angle_from(float y, float x)
+{
+    // Pack rule rejects atan2. One-argument atan stays inside the effect compiler.
+    float ax = max(abs(x), 0.0001);
+    float a = atan(y / ax);
+    if (x < 0.0)
+        a = (y < 0.0 ? -3.14159265 : 3.14159265) - a;
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
@@ -120,7 +129,7 @@ float4 mainImage(VertData v_in) : TARGET
     // Wrap so a multi-hour stream does not lose the spark phase.
     float clock = elapsed_time - floor(elapsed_time * (1.0 / 120.0)) * 120.0;
     float spin = clock * max(speed, 0.0);
-    float angle = atan2(scaled.y, scaled.x);
+    float angle = angle_from(scaled.y, scaled.x);
     float lead = pow(saturate(0.5 + 0.5 * cos(angle * 3.0 - spin * 0.90)), 12.0);
     float trail = pow(saturate(0.5 + 0.5 * cos(angle * 2.0 + spin * 0.55 + 2.1)), 10.0);
     float spark = lerp(0.62, 1.0, saturate(lead * 0.70 + trail * 0.45));

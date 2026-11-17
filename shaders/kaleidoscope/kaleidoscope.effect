@@ -71,7 +71,7 @@ float4 mainImage(VertData v_in) : TARGET
     float angle = atan2(p.y, p.x) + rotation;
 
     int segs = clamp(segments, 2, 16);
-    float slice_angle = TAU / max((float)segs, 0.001);
+    float slice_angle = TAU / max(float(segs), 0.001);
 
     // fmod keeps the sign of the angle, so a negative result is still outside the slice.
     angle = fmod(angle, slice_angle);

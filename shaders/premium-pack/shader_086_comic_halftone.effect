@@ -89,7 +89,6 @@ VertData VSDefault(VertData v_in)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;
@@ -125,8 +124,8 @@ float4 mainImage(VertData v_in) : TARGET
     float ink = 1.0 - smoothstep(edge0, edge1, dist);
 
     float levels = max(5.0, 0.001);
-    float3 flat = floor(source.rgb * levels + 0.5) / levels;
-    float3 dotted = lerp(flat, float3(0.05, 0.04, 0.06), ink);
+    float3 poster = floor(source.rgb * levels + 0.5) / levels;
+    float3 dotted = lerp(poster, float3(0.05, 0.04, 0.06), ink);
     float3 comic = lerp(source.rgb, dotted, grade);
     return float4(saturate(comic), alphaOut(source.a));
 }

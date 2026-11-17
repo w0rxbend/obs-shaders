@@ -103,7 +103,6 @@ float2 rotate2d(float2 p, float a)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;

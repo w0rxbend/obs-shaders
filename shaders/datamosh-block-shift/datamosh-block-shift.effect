@@ -6,6 +6,10 @@
 // probability : fraction of blocks that shift (0.0–1.0, default 0.15)
 // speed       : time scale for block re-randomisation (0.5–5.0, default 2.0)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float block_size <
     string label = "Block Size";
     string widget_type = "slider";
@@ -49,6 +53,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float hash2(float2 p)
 {
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
@@ -70,14 +82,23 @@ float4 mainImage(VertData v_in) : TARGET
     float h = hash2(blockCoord + tick * float2(0.1734, 0.9817));
 
     // Decide if this block is active
-    float active = step(1.0 - probability, h);
+    float gate = step(1.0 - probability, h);
 
     // Derive shift magnitude and direction from secondary hash
     float h2  = hash2(blockCoord * 1.7 + tick * float2(0.5311, 0.2173));
-    float shift = (h2 * 2.0 - 1.0) * shift_amount * active;
+    float shift = (h2 * 2.0 - 1.0) * shift_amount * gate;
 
     float2 shiftedUV = saturate(float2(uv.x + shift, uv.y));
 
     float4 color = image.Sample(textureSampler, shiftedUV);
     return float4(saturate(color.rgb), color.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

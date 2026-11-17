@@ -120,7 +120,6 @@ float smokeDensity(float2 field, float time_seconds, float coverage)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;

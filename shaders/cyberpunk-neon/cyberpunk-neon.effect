@@ -5,6 +5,10 @@
 // neon_shift   : strength of cyan/magenta hue shift (0.0–1.0, default 0.4)
 // bloom_strength: additive edge bloom intensity (0.0–1.0, default 0.3)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float saturation <
     string label = "Saturation";
     string widget_type = "slider";
@@ -42,6 +46,14 @@ struct VertData {
     float4 pos : POSITION;
     float2 uv  : TEXCOORD0;
 };
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
 
 float3 saturateColor(float3 c, float sat)
 {
@@ -88,4 +100,13 @@ float4 mainImage(VertData v_in) : TARGET
     col = saturate(col + bloomColor * bloom_strength);
 
     return float4(col, orig.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

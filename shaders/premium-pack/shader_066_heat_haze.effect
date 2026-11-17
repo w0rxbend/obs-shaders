@@ -103,7 +103,6 @@ float valueNoise(float2 p)
 
 float alphaOut(float sampled_alpha)
 {
-    [branch]
     if (!preserve_alpha)
     {
         return 1.0;

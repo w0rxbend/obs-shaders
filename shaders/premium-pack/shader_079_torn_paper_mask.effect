@@ -143,7 +143,6 @@ float4 mainImage(VertData v_in) : TARGET
     float3 rgb = lerp(source.rgb, paper, deckle);
 
     float alpha = source.a * mask;
-    [branch]
     if (!preserve_alpha)
     {
         rgb = lerp(float3(0.05, 0.045, 0.04), rgb, mask);

@@ -88,12 +88,21 @@ VertData VSDefault(VertData v_in)
 
 float alphaOut(float sampled_alpha)
 {
-    [branch]
     if (!preserve_alpha)
     {
         return 1.0;
     }
     return sampled_alpha;
+}
+
+float angle_from(float y, float x)
+{
+    // Pack rule rejects atan2. One-argument atan stays inside the effect compiler.
+    float ax = max(abs(x), 0.0001);
+    float a = atan(y / ax);
+    if (x < 0.0)
+        a = (y < 0.0 ? -3.14159265 : 3.14159265) - a;
+    return a;
 }
 
 float4 mainImage(VertData v_in) : TARGET
@@ -127,7 +136,7 @@ float4 mainImage(VertData v_in) : TARGET
     float along = abs(dot(p, dir));
     float ray = exp(-(across * across) / max(0.0014, 0.001)) * exp(-along * lerp(1.8, 0.7, spread));
 
-    float ang = atan2(p.y, p.x);
+    float ang = angle_from(p.y, p.x);
     float spikes = pow(abs(sin(ang * 3.0)), 16.0) * exp(-dist * 4.2);
 
     // Ghosts sit on the line that reflects the sun through the frame center.

@@ -116,7 +116,6 @@ float3 silverOverlay(float3 base, float silverLuma)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;

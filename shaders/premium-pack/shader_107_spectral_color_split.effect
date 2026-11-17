@@ -89,7 +89,6 @@ VertData VSDefault(VertData v_in)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;
@@ -131,7 +130,6 @@ float4 mainImage(VertData v_in) : TARGET
 
     // Per-channel weights sum to 1, so a flat color is unchanged and only edges split.
     float3 split_rgb = float3(0.0, 0.0, 0.0);
-    [unroll]
     for (int band = 0; band < 5; band++)
     {
         float along = (float(band) - 2.0) * spread;

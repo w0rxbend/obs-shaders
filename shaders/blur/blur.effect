@@ -2,6 +2,10 @@
 // Box blur / Gaussian approximation using uv_pixel_interval.
 // Uses one fixed 9-tap kernel for OBS real-time safety.
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float blur_size <
     string label = "Blur Size";
     string widget_type = "slider";
@@ -31,6 +35,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 // Single 9-tap (3x3) box blur at given pixel scale
 float4 boxBlur(float2 uv, float scale)
 {
@@ -55,4 +67,13 @@ float4 mainImage(VertData v_in) : TARGET
     float2 uv = v_in.uv;
     float pass_scale = lerp(1.0, 2.5, saturate((float(passes) - 1.0) / 3.0));
     return boxBlur(uv, blur_size * pass_scale);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

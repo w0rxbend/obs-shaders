@@ -124,11 +124,20 @@ float shardId(float ang, float count)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = sampled_alpha * saturate(opacity);
     }
+    return a;
+}
+
+float angle_from(float y, float x)
+{
+    // Pack rule rejects atan2. One-argument atan stays inside the effect compiler.
+    float ax = max(abs(x), 0.0001);
+    float a = atan(y / ax);
+    if (x < 0.0)
+        a = (y < 0.0 ? -3.14159265 : 3.14159265) - a;
     return a;
 }
 
@@ -142,7 +151,7 @@ float4 mainImage(VertData v_in) : TARGET
     float2 from_center = uv - center;
     from_center.x *= aspect;
     float radius = length(from_center);
-    float ang = atan2(from_center.y, from_center.x);
+    float ang = angle_from(from_center.y, from_center.x);
 
     float primary_count = 4.0 + amount * 4.0;
     float secondary_count = 3.0 + amount * 2.0;
@@ -190,7 +199,6 @@ float4 mainImage(VertData v_in) : TARGET
     glass = lerp(glass, saturate(glass + spark), saturate(rim));
 
     float3 effect = glass;
-    [branch]
     if (intensity > 0.001)
     {
         effect = saturate(glass);

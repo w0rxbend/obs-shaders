@@ -6,6 +6,10 @@
 // center_x  : ripple origin X          (0.0–1.0,  default 0.5)
 // center_y  : ripple origin Y          (0.0–1.0,  default 0.5)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float speed <
     string label = "Speed";
     string widget_type = "slider";
@@ -62,6 +66,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
@@ -84,4 +96,13 @@ float4 mainImage(VertData v_in) : TARGET
     float atten = radius * exp(-radius * 4.0);
     float2 uv_warp = clamp(uv + dir * ripple * atten * strength, 0.0, 1.0);
     return image.Sample(textureSampler, uv_warp);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

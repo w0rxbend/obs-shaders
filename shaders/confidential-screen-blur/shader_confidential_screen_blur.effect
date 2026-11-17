@@ -133,7 +133,6 @@ void loadModePreset(out float blur_pixels,
     noise        = 0.035;
     frost        = 0.16;
 
-    [branch]
     if (privacy_mode == 2)
     {
         blur_pixels  = 20.0;
@@ -145,7 +144,6 @@ void loadModePreset(out float blur_pixels,
         frost        = 0.30;
     }
 
-    [branch]
     if (privacy_mode >= 3)
     {
         blur_pixels  = 34.0;
@@ -162,7 +160,6 @@ float2 pixelatedUV(float2 uv, float block_pixels)
 {
     float2 source_pixels = max(float2(1.0, 1.0), uv_size);
 
-    [branch]
     if (source_pixels.x <= 1.0 || source_pixels.y <= 1.0)
     {
         source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.001, 0.001)));
@@ -216,12 +213,10 @@ float3 applyPrivacyLook(float3 rgb,
     rgb = lerp(rgb, frost_color * (0.55 + luma * 0.45), saturate(frost));
     rgb *= (1.0 - saturate(dim));
 
-    [branch]
     if (enable_noise)
     {
         float2 source_pixels = max(float2(1.0, 1.0), uv_size);
 
-        [branch]
         if (source_pixels.x <= 1.0 || source_pixels.y <= 1.0)
         {
             source_pixels = max(float2(1.0, 1.0), float2(1.0, 1.0) / max(uv_pixel_interval, float2(0.001, 0.001)));
@@ -263,13 +258,11 @@ float4 mainImage(VertData v_in) : TARGET
 
     float2 privacy_uv = uv;
 
-    [branch]
     if (enable_pixelation)
     {
         privacy_uv = pixelatedUV(uv, block_pixels);
     }
 
-    [branch]
     if (enable_blur)
     {
         float4 protected_image = gaussianBlur9(privacy_uv, blur_pixels);

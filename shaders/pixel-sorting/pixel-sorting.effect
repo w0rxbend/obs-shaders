@@ -6,6 +6,10 @@
 // sort_amount  : maximum UV shift distance (0.0–0.2, default 0.05)
 // direction    : 0.0 = horizontal sort, 1.0 = vertical sort (default 0.0)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float threshold <
     string label = "Threshold";
     string widget_type = "slider";
@@ -43,6 +47,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
@@ -77,4 +89,13 @@ float4 mainImage(VertData v_in) : TARGET
     result.rgb = saturate(result.rgb);
     result.a = orig.a;
     return result;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

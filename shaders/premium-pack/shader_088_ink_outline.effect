@@ -89,7 +89,6 @@ float sampleLuma(float2 uv)
 
 float alphaOut(float sampled_alpha)
 {
-    [branch]
     if (!preserve_alpha)
     {
         return 1.0;

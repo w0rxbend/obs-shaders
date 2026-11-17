@@ -109,7 +109,6 @@ float3 lumaWithChroma(float luma, float3 chroma_rgb)
 
 float alphaOut(float sampled_alpha)
 {
-    [branch]
     if (preserve_alpha)
     {
         return sampled_alpha;

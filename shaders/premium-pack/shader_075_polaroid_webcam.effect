@@ -140,7 +140,6 @@ float4 mainImage(VertData v_in) : TARGET
     float3 shown = lerp(source.rgb, framed, reveal);
 
     float alpha = source.a;
-    [branch]
     if (!preserve_alpha)
     {
         alpha = 1.0;

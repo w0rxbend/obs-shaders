@@ -1,6 +1,10 @@
 // A5 — cinematic-contrast
 // S-curve contrast boost with lifted blacks (cinematic look).
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float contrast <
     string label = "Contrast";
     string widget_type = "slider";
@@ -38,6 +42,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 // Smooth S-curve via smoothstep remapping
 float scurve(float x, float c)
 {
@@ -69,4 +81,13 @@ float4 mainImage(VertData v_in) : TARGET
     float3 sat = lerp(float3(luma, luma, luma), contrasted, saturation);
 
     return float4(saturate(sat), col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

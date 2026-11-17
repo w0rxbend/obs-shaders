@@ -5,6 +5,10 @@
 // Use case: Desaturates, adds scanlines, timestamp flicker bars, and a REC dot pulse
 // Chain order: Apply last; replaces normal look entirely
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float desaturate <
     string label = "Desaturate";
     string widget_type = "slider";
@@ -53,6 +57,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float hash21(float2 p)
 {
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
@@ -95,4 +107,13 @@ float4 mainImage(VertData v_in) : TARGET
 
     col.rgb = saturate(col.rgb);
     return float4(col.rgb, col.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

@@ -13,7 +13,11 @@
 //   3. OBS is restarted after plugin install
 // =====================================================
 
-// --- Uniforms (OBS injects these; declare to expose in UI) ----------------
+// --- Uniforms -------------------------------------------------------------
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float opacity <
     string label = "Opacity";
     string widget_type = "slider";
@@ -34,6 +38,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 // --- Built-in uniforms provided by obs-shaderfilter -----------------------
 // (declare any you want to use; OBS will populate them automatically)
 // uniform float  elapsed_time;     // seconds since filter activated
@@ -42,7 +54,7 @@ struct VertData {
 
 // --- Entry point ----------------------------------------------------------
 // Signature is fixed: float4 mainImage(VertData v_in) : TARGET
-// OBS provides: image (Texture2D), textureSampler (SamplerState), VertData
+// technique Draw binds VSDefault and mainImage. A .effect path does not get the plugin wrapper.
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv  = v_in.uv;                              // [0,1] top-left origin
@@ -51,4 +63,13 @@ float4 mainImage(VertData v_in) : TARGET
     col.a *= opacity;   // apply opacity uniform — tests uniform injection
 
     return col;         // return unchanged (except opacity)
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

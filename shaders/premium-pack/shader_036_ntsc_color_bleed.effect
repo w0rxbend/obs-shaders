@@ -105,7 +105,6 @@ float3 yiq_to_rgb(float3 yiq)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = sampled_alpha * saturate(opacity);
@@ -134,7 +133,6 @@ float4 mainImage(VertData v_in) : TARGET
     float2 chroma = center_yiq.yz;
     float weight_sum = 1.0;
 
-    [unroll]
     for (int tap = 1; tap <= 3; tap++)
     {
         float tap_f = float(tap);

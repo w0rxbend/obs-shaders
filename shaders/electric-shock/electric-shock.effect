@@ -74,10 +74,10 @@ float4 mainImage(VertData v_in) : TARGET
     float r3 = hash1(snapped + 41.9);
 
     // Pulse gate: shock fires ~30% of frames
-    float active = step(0.7, r0);
+    float gate = step(0.7, r0);
 
     // RGB channel split offsets — random direction each pulse
-    float split = rgb_split * active;
+    float split = rgb_split * gate;
     float2 split_r = float2( split * (r1 * 2.0 - 1.0),  split * (r2 * 2.0 - 1.0) * 0.3);
     float2 split_b = float2(-split * (r1 * 2.0 - 1.0), -split * (r2 * 2.0 - 1.0) * 0.3);
 
@@ -89,12 +89,12 @@ float4 mainImage(VertData v_in) : TARGET
     float3 col = float3(red, green, blue);
 
     // White flash
-    float flash = r3 * flash_intensity * active;
+    float flash = r3 * flash_intensity * gate;
     col = lerp(col, float3(1.0, 1.0, 1.0), flash);
 
     // Subtle scanline twitch on active frames
     float twitch_line = step(0.97, frac(uv.y * 80.0 + r1 * 40.0));
-    col = lerp(col, float3(1.0, 1.0, 1.0), twitch_line * active * 0.5);
+    col = lerp(col, float3(1.0, 1.0, 1.0), twitch_line * gate * 0.5);
 
     return float4(saturate(col), alpha);
 }

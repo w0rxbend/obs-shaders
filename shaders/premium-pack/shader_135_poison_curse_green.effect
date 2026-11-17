@@ -88,7 +88,6 @@ float luma3(float3 color)
 float alphaOut(float sampled_alpha)
 {
     float alpha = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         alpha = 1.0;

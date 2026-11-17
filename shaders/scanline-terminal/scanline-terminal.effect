@@ -5,6 +5,10 @@
 // scanline_gap : scanline period in screen-line units (1.0–6.0, default 2.0)
 // flicker      : brightness flicker amplitude (0.0–0.5, default 0.08)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float green_tint <
     string label = "Green Tint";
     string widget_type = "slider";
@@ -43,6 +47,14 @@ struct VertData {
     float4 pos : POSITION;
     float2 uv  : TEXCOORD0;
 };
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
 
 float hash1(float t)
 {
@@ -85,4 +97,13 @@ float4 mainImage(VertData v_in) : TARGET
     col *= vigAmt;
 
     return float4(saturate(col), orig.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

@@ -3,6 +3,10 @@
 // separation    : horizontal UV offset (0.0–0.05, default 0.008)
 // vertical_shift: vertical UV offset   (0.0–0.02,  default 0.0)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float separation <
     string label = "Separation";
     string widget_type = "slider";
@@ -31,6 +35,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
@@ -46,4 +58,13 @@ float4 mainImage(VertData v_in) : TARGET
 
     float3 rgb = saturate(float3(colLeft.r, colRight.g, colRight.b));
     return float4(rgb, source_alpha);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

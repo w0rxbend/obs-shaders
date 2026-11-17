@@ -97,7 +97,6 @@ float hash12(float2 p)
 float alphaOut(float sampled_alpha)
 {
     float a = sampled_alpha;
-    [branch]
     if (!preserve_alpha)
     {
         a = 1.0;
@@ -117,13 +116,23 @@ float4 regionStats(float3 a, float3 b, float3 c)
     return float4(mean, spread);
 }
 
+float angle_from(float y, float x)
+{
+    // Pack rule rejects atan2. One-argument atan stays inside the effect compiler.
+    float ax = max(abs(x), 0.0001);
+    float a = atan(y / ax);
+    if (x < 0.0)
+        a = (y < 0.0 ? -3.14159265 : 3.14159265) - a;
+    return a;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
     float4 src = image.Sample(textureSampler, clamp(uv, 0.0, 1.0));
     float aspect = uv_size.x / max(uv_size.y, 1.0);
     float2 from_center = float2((uv.x - center_x) * aspect, uv.y - center_y);
-    float ang = atan2(from_center.y, from_center.x) + sin(elapsed_time * speed) * 0.22;
+    float ang = angle_from(from_center.y, from_center.x) + sin(elapsed_time * speed) * 0.22;
     float2 dir = float2(cos(ang), sin(ang));
     float reach = 1.0 + amount * 2.5;
     float2 along = float2(dir.x * uv_pixel_interval.x, dir.y * uv_pixel_interval.y) * reach;

@@ -88,7 +88,6 @@ VertData VSDefault(VertData v_in)
 
 float alphaOut(float sampled_alpha)
 {
-    [branch]
     if (!preserve_alpha)
     {
         return 1.0;
@@ -119,7 +118,6 @@ float4 mainImage(VertData v_in) : TARGET
     float reach = lerp(0.006, 0.030, spread);
     float reach_x = reach / max(aspect, 0.001);
     float3 bloom = float3(0.0, 0.0, 0.0);
-    [unroll]
     for (int tap = 0; tap < 4; tap++)
     {
         float ang = 1.57079632679 * float(tap);

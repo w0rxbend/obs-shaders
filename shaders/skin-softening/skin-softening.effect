@@ -2,6 +2,10 @@
 // Bilateral-like blur: box blur weighted by color similarity.
 // Smooths uniform-color regions (skin) while preserving edges.
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform int blur_radius <
     string label = "Blur Radius";
     string widget_type = "slider";
@@ -40,6 +44,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
@@ -52,10 +64,8 @@ float4 mainImage(VertData v_in) : TARGET
     float sigma = max(threshold, 0.001);
     float color_window = max(2.0 * sigma * sigma, 0.001);
 
-    [unroll(3)]
     for (int y = -1; y <= 1; y++)
     {
-        [unroll(3)]
         for (int x = -1; x <= 1; x++)
         {
             float2 offset = float2(float(x), float(y)) * uv_pixel_interval * scale;
@@ -71,4 +81,13 @@ float4 mainImage(VertData v_in) : TARGET
     float3 blurred = accum / max(weight, 0.001);
     float3 softened = saturate(lerp(center.rgb, blurred, strength));
     return float4(softened, center.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

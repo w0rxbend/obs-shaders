@@ -1,6 +1,10 @@
 // A1 — rounded-corners
 // Masks corners with a smooth rounded rectangle, outputting transparency.
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float radius <
     string label = "Radius";
     string widget_type = "slider";
@@ -31,6 +35,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 // Height-normalized space keeps the corner radius circular on widescreen.
 float sdRoundedRect(float2 p, float2 half_extent, float r)
 {
@@ -56,4 +68,13 @@ float4 mainImage(VertData v_in) : TARGET
 
     col.a *= mask;
     return col;
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

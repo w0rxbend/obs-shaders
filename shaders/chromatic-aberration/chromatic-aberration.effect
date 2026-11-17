@@ -3,6 +3,10 @@
 // strength : maximum offset in UV units  (0.0–0.05, default 0.01)
 // falloff  : radius exponent — higher = fringing concentrated near edges (0.0–3.0, default 2.0)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float strength <
     string label = "Strength";
     string widget_type = "slider";
@@ -32,6 +36,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float4 mainImage(VertData v_in) : TARGET
 {
     float2 uv = v_in.uv;
@@ -58,4 +70,13 @@ float4 mainImage(VertData v_in) : TARGET
 
     float3 rgb = saturate(float3(red.r, green.g, blue.b));
     return float4(rgb, green.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

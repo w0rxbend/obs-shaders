@@ -127,7 +127,6 @@ float4 mainImage(VertData v_in) : TARGET
 
     float3 out_rgb = lerp(center.rgb, rgb, saturate(opacity));
     float out_a = center.a;
-    [branch]
     if (!preserve_alpha)
     {
         out_a = saturate(center.a);

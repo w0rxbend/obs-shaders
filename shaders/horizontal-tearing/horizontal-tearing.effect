@@ -5,6 +5,10 @@
 // speed       : band update rate in ticks/sec (0.5–10.0, default 3.0)
 // probability : fraction of bands that tear at once (0.0–1.0, default 0.2)
 
+uniform float4x4 ViewProj;
+uniform float2 uv_offset;
+uniform float2 uv_scale;
+
 uniform float band_count <
     string label = "Band Count";
     string widget_type = "slider";
@@ -48,6 +52,14 @@ struct VertData {
     float2 uv  : TEXCOORD0;
 };
 
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv * uv_scale + uv_offset;
+    return vert_out;
+}
+
 float hash2(float2 p)
 {
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
@@ -66,14 +78,23 @@ float4 mainImage(VertData v_in) : TARGET
     float h = hash2(float2(bandIndex, tick));
 
     // Gate: only tear if hash exceeds (1 - probability)
-    float active = step(1.0 - probability, h);
+    float gate = step(1.0 - probability, h);
 
     // Direction and magnitude
     float h2    = hash2(float2(bandIndex * 1.7, tick + 0.5));
-    float shift = (h2 * 2.0 - 1.0) * tear_amount * active;
+    float shift = (h2 * 2.0 - 1.0) * tear_amount * gate;
 
     float2 tornUV = float2(saturate(uv.x + shift), saturate(uv.y));
 
     float4 color = image.Sample(textureSampler, tornUV);
     return float4(saturate(color.rgb), color.a);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader = mainImage(v_in);
+    }
 }

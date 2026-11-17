@@ -88,7 +88,6 @@ VertData VSDefault(VertData v_in)
 
 float alphaOut(float sampled_alpha)
 {
-    [branch]
     if (preserve_alpha)
     {
         return sampled_alpha;
@@ -107,7 +106,6 @@ float4 mainImage(VertData v_in) : TARGET
     // 0.009 keeps the default shift near one percent of the frame.
     float disparity_scale = max(amount, 0.0) * 0.009 * max(intensity, 0.0) * pulse;
 
-    [branch]
     if (disparity_scale < 0.0001)
     {
         return float4(source.rgb, alphaOut(source.a));

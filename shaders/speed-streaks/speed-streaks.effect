@@ -64,7 +64,7 @@ float4 mainImage(VertData v_in) : TARGET
     float3 sum = base.rgb;
     for (int i = 1; i < 8; i++)
     {
-        float t = (float)i / max(7.0, 0.001);
+        float t = float(i) / max(7.0, 0.001);
         float scale = 1.0 - streak_amount * t;
         float2 sample_uv = clamp(center + dir * scale, 0.0, 1.0);
         sum += image.Sample(textureSampler, sample_uv).rgb;
