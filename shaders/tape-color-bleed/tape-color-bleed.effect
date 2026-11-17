@@ -9,7 +9,13 @@ uniform float bleed_amount <
     float step = 0.001;
 > = 0.012;
 
-uniform int smear = 4; // 1 – 8
+uniform int smear <
+    string label = "Smear";
+    string widget_type = "slider";
+    int minimum = 1;
+    int maximum = 8;
+    int step = 1;
+> = 4;
 
 uniform float saturation_boost <
     string label = "Saturation Boost";
