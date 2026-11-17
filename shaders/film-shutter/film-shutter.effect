@@ -19,7 +19,13 @@ uniform float progress <
     float step = 0.01;
 > = 0.5;
 
-uniform int bar_count = 8; // 2–20 number of horizontal shutter bars
+uniform int bar_count <
+    string label = "Bar Count";
+    string widget_type = "slider";
+    int minimum = 2;
+    int maximum = 20;
+    int step = 1;
+> = 8;
 
 uniform float softness <
     string label = "Softness";
