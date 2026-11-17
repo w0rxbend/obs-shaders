@@ -30,11 +30,15 @@ REQUIRED_SNIPPETS = [
     "uniform texture2d image;",
     "uniform float elapsed_time;",
     "float4 mainImage(VertData v_in) : TARGET",
-    "float2 uv = v_in.uv;",
-    "float4 color = image.Sample(textureSampler, uv);",
+    "image.Sample(textureSampler",
+    "v_in.uv * uv_scale + uv_offset",
     "return float4",
     "technique Draw",
 ]
+
+
+def strip_line_comments(text: str) -> str:
+    return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
 
 
 def fail(message: str) -> None:
@@ -53,7 +57,7 @@ def main() -> None:
             fail(f"expected filename prefix {prefix}, found {path.name}")
 
     for path in files:
-        text = path.read_text(encoding="utf-8")
+        text = strip_line_comments(path.read_text(encoding="utf-8"))
 
         for snippet in REQUIRED_SNIPPETS:
             if snippet not in text:

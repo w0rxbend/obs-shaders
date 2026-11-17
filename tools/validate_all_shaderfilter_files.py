@@ -118,17 +118,22 @@ def main() -> int:
             if re.search(r"pixel_shader\s*=\s*VSDefault\s*\(", code):
                 file_errors.append(f"{path_rel}: technique binds vertex shader VSDefault as pixel shader")
 
-            if re.search(r"vertex_shader\s*=\s*VSDefault\s*\(", code):
-                if "VertData VSDefault(VertData v_in)" not in code:
-                    file_errors.append(f"{path_rel}: technique uses VSDefault but the function is missing")
-                if "uniform float4x4 ViewProj" not in code:
-                    file_errors.append(f"{path_rel}: VSDefault requires uniform float4x4 ViewProj")
-
-            if "technique Draw" in code:
+            if "technique Draw" not in code:
+                file_errors.append(
+                    f"{path_rel}: missing technique Draw; a .effect file is loaded with override entire effect and draws nothing without it"
+                )
+            else:
                 if not re.search(r"pixel_shader\s*=\s*mainImage\s*\(", code):
                     file_errors.append(f"{path_rel}: technique Draw missing pixel_shader = mainImage(v_in)")
-                if not re.search(r"vertex_shader\s*=\s*[A-Za-z_]\w*\s*\(", code):
-                    file_errors.append(f"{path_rel}: technique Draw missing vertex_shader binding")
+                if not re.search(r"vertex_shader\s*=\s*VSDefault\s*\(", code):
+                    file_errors.append(f"{path_rel}: technique Draw must bind vertex_shader = VSDefault(v_in)")
+
+            if "VertData VSDefault(VertData v_in)" not in code:
+                file_errors.append(f"{path_rel}: missing VertData VSDefault(VertData v_in)")
+            if "uniform float4x4 ViewProj" not in code:
+                file_errors.append(f"{path_rel}: missing uniform float4x4 ViewProj")
+            if not re.search(r"v_in\.uv\s*\*\s*uv_scale\s*\+\s*uv_offset", code):
+                file_errors.append(f"{path_rel}: VSDefault must set uv to v_in.uv * uv_scale + uv_offset")
 
         sample_count = code.count("image.Sample(textureSampler")
         if not reference_only:
