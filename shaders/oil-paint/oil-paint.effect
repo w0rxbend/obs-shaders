@@ -5,8 +5,20 @@
 uniform float4x4 ViewProj;
 uniform float2 uv_offset;
 uniform float2 uv_scale;
-uniform int radius = 3;  // 1 – 6   half-width of sampling window
-uniform int levels = 8;  // 4 – 16  brightness quantisation buckets
+uniform int radius <
+    string label = "Radius";
+    string widget_type = "slider";
+    int minimum = 1;
+    int maximum = 6;
+    int step = 1;
+> = 3;
+uniform int levels <
+    string label = "Levels";
+    string widget_type = "slider";
+    int minimum = 4;
+    int maximum = 16;
+    int step = 1;
+> = 8;
 
 uniform float2    uv_pixel_interval;
 uniform texture2d image;
