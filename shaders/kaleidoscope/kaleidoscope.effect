@@ -10,7 +10,13 @@ uniform float2 uv_offset;
 uniform float2 uv_scale;
 uniform float2 uv_size;
 
-uniform int segments = 6; // 2–16
+uniform int segments <
+    string label = "Segments";
+    string widget_type = "slider";
+    int minimum = 2;
+    int maximum = 16;
+    int step = 1;
+> = 6;
 
 uniform float rotation <
     string label = "Rotation";
