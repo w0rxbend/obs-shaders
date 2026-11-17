@@ -19,15 +19,16 @@ Each shader lives in its own folder so all variants and assets stay together.
 
 ## Shaders
 
-| Shader | Description |
-|--------|-------------|
-| [lens-dirt](shaders/lens-dirt/) | Procedural noise-based sensor dust/smudge overlay |
+Each folder under `shaders/` is one effect. `shaders/premium-pack/` holds 150 numbered effects. `shaders/_helpers/helpers.effect` is a paste reference. The plugin does not include it.
 
 ## Usage
 
-1. In OBS, add a **Filter** to a source → **Shader Filter**
-2. Browse to the `.effect` file
-3. Adjust the exposed uniforms in the filter panel
+1. In OBS, add a **Filter** to a source, then **User-defined shader**.
+2. Load the `.effect` file from disk.
+3. Leave **Override entire effect** on. A `.effect` path turns it on. The file must contain `technique Draw`.
+4. Adjust the exposed uniforms in the filter panel.
+
+A file with no `technique Draw` draws nothing.
 
 ## Media files
 
