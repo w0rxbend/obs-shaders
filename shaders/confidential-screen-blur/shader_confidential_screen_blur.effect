@@ -17,7 +17,16 @@ uniform float2 uv_size;
 uniform float elapsed_time;
 
 // Mode selector: 1 = Light, 2 = Strong, 3 = Maximum.
-uniform int privacy_mode = 2;
+uniform int privacy_mode <
+    string label = "Privacy Mode";
+    string widget_type = "select";
+    int option_0_value = 1;
+    string option_0_label = "Light";
+    int option_1_value = 2;
+    string option_1_label = "Strong";
+    int option_2_value = 3;
+    string option_2_label = "Maximum";
+> = 2;
 
 // Required controls. Strength controls are normalized multipliers around the
 // selected mode preset. Defaults are tuned for unreadable text/code at 1080p.
